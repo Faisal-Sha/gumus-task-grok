@@ -30,8 +30,21 @@ go run main.go
 ```
 
 4. Fetch products:
+
+```bash
 curl http://localhost:8080/fetch
+```
 
 5. Check database:
+
+```bash
 docker exec -it grok-sraper-postgres-1 psql -U trendyol_user -d trendyol_tracker -c "SELECT name, seller, is_active FROM products;"
+```
+
+6. Stop services:
+
+```bash
+docker compose down
+```
+
 
