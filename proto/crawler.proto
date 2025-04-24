@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package proto;
+
+option go_package = "scraper/proto";
+
+service CrawlerService {
+    rpc FetchProducts (FetchRequest) returns (FetchResponse);
+}
+
+message FetchRequest {}
+
+message FetchResponse {
+    bytes products = 1;
+}

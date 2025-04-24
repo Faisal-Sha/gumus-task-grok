@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package proto;
+
+option go_package = "scraper/proto";
+
+service NotificationService {
+    rpc SendNotification (NotificationRequest) returns (NotificationResponse);
+}
+
+message NotificationRequest {
+    string user_id = 1;
+    uint32 product_id = 2;
+    string message = 3;
+}
+
+message NotificationResponse {
+    bool success = 1;
+}
