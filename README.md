@@ -12,13 +12,22 @@ protoc --go_out=. --go_opt=paths=source_relative     --go-grpc_out=. --go-grpc_o
 ```
 
 1. Install dependencies:
+
+```bash
 go mod tidy
+```
 
 2. Start services:
+
+```bash
 docker compose up -d
+```
 
 3. Run application:
+
+```bash
 go run main.go
+```
 
 4. Fetch products:
 curl http://localhost:8080/fetch
