@@ -11,10 +11,13 @@ import (
 
 	pb "scraper/proto"
 
+	"bytes"
+
 	"github.com/IBM/sarama"
 	"github.com/labstack/echo/v4"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"gorm.io/datatypes"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
@@ -25,26 +28,26 @@ type Product struct {
 	ID                 uint `gorm:"primaryKey"`
 	CategoryPath       string
 	Name               string
-	Images             []string `gorm:"type:jsonb" json:"images"`
+	Images             datatypes.JSON `gorm:"type:jsonb"`
 	Video              string
 	Seller             string
 	Brand              string
-	RatingScore        float32
+	RatingScore        datatypes.JSON `gorm:"type:jsonb"`
 	FavoritesCount     int
 	CommentsCount      int
 	AddToCartEvents    int
 	Views              int
 	Orders             int
-	TopReviews         []interface{} `gorm:"type:jsonb" json:"top_reviews,omitempty"`
+	TopReviews         datatypes.JSON `gorm:"type:jsonb"`
 	SizeRecommendation string
 	EstimatedDelivery  string
-	StockInfo          map[string]interface{} `gorm:"type:jsonb" json:"stock_info"`
-	PriceInfo          map[string]interface{} `gorm:"type:jsonb" json:"price_info"`
-	SimilarProducts    []interface{}          `gorm:"type:jsonb" json:"similar_products,omitempty"`
-	Attributes         map[string]interface{} `gorm:"type:jsonb" json:"attributes"`
-	OtherSellers       []interface{}          `gorm:"type:jsonb" json:"other_sellers,omitempty"`
-	IsActive           bool                   `gorm:"default:true"`
-	IsFavorite         bool                   `gorm:"default:false"`
+	StockInfo          datatypes.JSON `gorm:"type:jsonb"`
+	PriceInfo          datatypes.JSON `gorm:"type:jsonb"`
+	SimilarProducts    datatypes.JSON `gorm:"type:jsonb"`
+	Attributes         datatypes.JSON `gorm:"type:jsonb"`
+	OtherSellers       datatypes.JSON `gorm:"type:jsonb"`
+	IsActive           bool           `gorm:"default:true"`
+	IsFavorite         bool           `gorm:"default:false"`
 }
 
 type TrendyolResponse struct {
@@ -70,42 +73,6 @@ type TrendyolResponse struct {
 	} `json:"data"`
 	StatusCode int  `json:"statusCode"`
 	IsSuccess  bool `json:"isSuccess"`
-}
-
-func (p *Product) BeforeSave(tx *gorm.DB) error {
-	if p.Images != nil {
-		imagesJSON, err := json.Marshal(p.Images)
-		if err != nil {
-			return err
-		}
-		tx.Statement.SetColumn("images", string(imagesJSON))
-	}
-
-	if p.StockInfo != nil {
-		stockJSON, err := json.Marshal(p.StockInfo)
-		if err != nil {
-			return err
-		}
-		tx.Statement.SetColumn("stock_info", string(stockJSON))
-	}
-
-	if p.PriceInfo != nil {
-		priceJSON, err := json.Marshal(p.PriceInfo)
-		if err != nil {
-			return err
-		}
-		tx.Statement.SetColumn("price_info", string(priceJSON))
-	}
-
-	if p.Attributes != nil {
-		attrJSON, err := json.Marshal(p.Attributes)
-		if err != nil {
-			return err
-		}
-		tx.Statement.SetColumn("attributes", string(attrJSON))
-	}
-
-	return nil
 }
 
 // PriceStockLog logs price and stock changes
@@ -210,15 +177,23 @@ func readMockData() ([]Product, error) {
 	// Convert TrendyolResponse to []Product
 	products := make([]Product, len(response.Data.Contents))
 	for i, item := range response.Data.Contents {
+		// Convert maps to JSON strings first, then to datatypes.JSON
+		ratingJSON, _ := json.Marshal(map[string]interface{}{
+			"averageRating": item.RatingScore.AverageRating,
+			"totalCount":    item.RatingScore.TotalCount,
+		})
+		stockJSON, _ := json.Marshal(map[string]interface{}{"stock": 10})
+		priceJSON, _ := json.Marshal(map[string]interface{}{"price": 99.99, "currency": "USD"})
+
 		products[i] = Product{
 			Name:         item.Name,
 			CategoryPath: item.Category.Name,
-			Brand:       item.Brand,
-			RatingScore: item.RatingScore.AverageRating,
-			IsActive:    true,
-			// Add other fields as needed with default values
-			StockInfo: map[string]interface{}{"stock": 10},
-			PriceInfo: map[string]interface{}{"price": 99.99, "currency": "USD"},
+			Brand:        item.Brand,
+			Seller:       fmt.Sprintf("Merchant-%d", item.MerchantID),
+			RatingScore:  datatypes.JSON(ratingJSON),
+			IsActive:     true,
+			StockInfo:    datatypes.JSON(stockJSON),
+			PriceInfo:    datatypes.JSON(priceJSON),
 		}
 	}
 
@@ -266,6 +241,14 @@ func startCrawlerService() {
 // Product Analysis Service
 func startProductAnalysisService() {
 	db := setupDB()
+	// Add a ping to verify connection
+	sqlDB, err := db.DB()
+	if err != nil {
+		log.Fatal("Failed to get database connection:", err)
+	}
+	if err := sqlDB.Ping(); err != nil {
+		log.Fatal("Failed to ping database:", err)
+	}
 	producer := setupKafkaProducer()
 
 	// gRPC client to Notification Service
@@ -287,51 +270,60 @@ func startProductAnalysisService() {
 		log.Printf("Unmarshaled %d products", len(products))
 
 		for _, p := range products {
+			log.Printf("Processing product: %s, Seller: %s", p.Name, p.Seller)
 			var existing Product
 			if err := db.Where("name = ? AND seller = ?", p.Name, p.Seller).First(&existing).Error; err != nil {
-				// New Product
-				db.Create(&p)
-			} else {
-				// Existing Product
-				stock, ok := p.StockInfo["stock"].(float64)
-				if ok && stock == 0 {
-					db.Model(&existing).Update("is_active", false)
+				log.Printf("Creating new product: %s (Seller: %s)", p.Name, p.Seller)
+				result := db.Create(&p)
+				if result.Error != nil {
+					log.Printf("Error creating product: %v", result.Error)
 				} else {
-					// Check critical fields and log changes
-					oldPriceJSON, _ := json.Marshal(existing.PriceInfo)
-					newPriceJSON, _ := json.Marshal(p.PriceInfo)
-					oldStockJSON, _ := json.Marshal(existing.StockInfo)
-					newStockJSON, _ := json.Marshal(p.StockInfo)
+					log.Printf("Successfully created product with ID: %d", p.ID)
+				}
+			} else {
+				log.Printf("Found existing product: %s (ID: %d)", existing.Name, existing.ID)
+				// Existing Product
+				var stockMap map[string]interface{}
+				if err := json.Unmarshal(p.StockInfo, &stockMap); err == nil {
+					if stock, ok := stockMap["stock"].(float64); ok && stock == 0 {
+						db.Model(&existing).Update("is_active", false)
+					}
+				} else {
+					log.Printf("Error unmarshaling stock info: %v", err)
+				}
+				// Check critical fields and log changes
+				if !bytes.Equal(existing.PriceInfo, p.PriceInfo) || !bytes.Equal(existing.StockInfo, p.StockInfo) {
+					logEntry := PriceStockLog{
+						ProductID:  existing.ID,
+						OldPrice:   string(existing.PriceInfo),
+						NewPrice:   string(p.PriceInfo),
+						OldStock:   string(existing.StockInfo),
+						NewStock:   string(p.StockInfo),
+						ChangeTime: time.Now(),
+					}
+					db.Create(&logEntry)
 
-					if string(oldPriceJSON) != string(newPriceJSON) || string(oldStockJSON) != string(newStockJSON) {
-						logEntry := PriceStockLog{
-							ProductID:  existing.ID,
-							OldPrice:   string(oldPriceJSON),
-							NewPrice:   string(newPriceJSON),
-							OldStock:   string(oldStockJSON),
-							NewStock:   string(newStockJSON),
-							ChangeTime: time.Now(),
-						}
-						db.Create(&logEntry)
+					// Check for price drop using unmarshal
+					var oldPriceMap, newPriceMap map[string]interface{}
+					json.Unmarshal(existing.PriceInfo, &oldPriceMap)
+					json.Unmarshal(p.PriceInfo, &newPriceMap)
 
-						// Check for price drop
-						var oldPrice, newPrice struct{ Price float64 }
-						json.Unmarshal([]byte(oldPriceJSON), &oldPrice)
-						json.Unmarshal([]byte(newPriceJSON), &newPrice)
-						if newPrice.Price < oldPrice.Price && existing.IsFavorite {
-							_, err = notificationClient.SendNotification(context.Background(), &pb.NotificationRequest{
-								UserId:    "admin", // Replace with actual user ID
-								ProductId: uint32(p.ID),
-								Message:   "Price change detected!",
-							})
-							if err != nil {
-								log.Fatal(err)
-							}
+					oldPrice, _ := oldPriceMap["price"].(float64)
+					newPrice, _ := newPriceMap["price"].(float64)
+
+					if newPrice < oldPrice && existing.IsFavorite {
+						_, err = notificationClient.SendNotification(context.Background(), &pb.NotificationRequest{
+							UserId:    "admin", // Replace with actual user ID
+							ProductId: uint32(p.ID),
+							Message:   "Price change detected!",
+						})
+						if err != nil {
+							log.Fatal(err)
 						}
 					}
-					// Update DB
-					db.Model(&existing).Updates(p)
 				}
+				// Update DB
+				db.Model(&existing).Updates(p)
 			}
 		}
 	})
