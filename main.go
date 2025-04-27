@@ -24,10 +24,10 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/labstack/echo/v4"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 	"gorm.io/datatypes"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
 // PriceStockLog logs price and stock changes
@@ -219,9 +219,8 @@ type TrendyolResponse struct {
 				Price      float64 `json:"price"`
 				Value      string  `json:"value"`
 			} `json:"allVariants"`
-			isFavorited bool `json:"isPeopleLikeThisProduct"`
-
-			Brand struct {
+			IsFavorited bool `json:"isPeopleLikeThisProduct"`
+			Brand       struct {
 				ID   int    `json:"id"`
 				Name string `json:"name"`
 			} `json:"brand"`
@@ -328,7 +327,7 @@ func ConvertTrendyolToProduct(item *TrendyolResponse) []Product {
 			"commentCount":  content.RatingScore.CommentCount,
 			"totalCount":    content.RatingScore.TotalCount,
 		})
-
+		comments := content.RatingScore.CommentCount
 		stockJSON, _ := json.Marshal(map[string]interface{}{
 			"stock":    content.WinnerVariant.Stock.Quantity,
 			"disabled": content.WinnerVariant.Stock.Disabled,
@@ -382,16 +381,14 @@ func ConvertTrendyolToProduct(item *TrendyolResponse) []Product {
 		}
 		imagesJSON, _ := json.Marshal(images)
 
-		var orders, favorites, views, comments, addToBasket string
+		var orders, favorites, views, addToBasket string
 		for _, count := range content.SocialProof {
 			if count.Key == "orderCount" {
 				orders = count.Value
 			} else if count.Key == "favoriteCount" {
 				favorites = count.Value
-			} else if count.Key == "viewCount" {
+			} else if count.Key == "pageViewCount" {
 				views = count.Value
-			} else if count.Key == "commentCount" {
-				comments = count.Value
 			} else if count.Key == "basketCount" {
 				addToBasket = count.Value
 			}
@@ -411,8 +408,8 @@ func ConvertTrendyolToProduct(item *TrendyolResponse) []Product {
 			Orders:            orders,
 			FavoritesCount:    favorites,
 			Views:             views,
-			IsFavorite:        strings.Contains(strings.ToLower(favorites), "k"),
-			CommentsCount:     comments,
+			IsFavorite:        content.IsFavorited,
+			CommentsCount:     strconv.Itoa(comments),
 			AddToCartEvents:   addToBasket,
 			EstimatedDelivery: datatypes.JSON(deliveryJSON),
 			OtherSellers:      datatypes.JSON(otherSellersVariantsJSON),
@@ -422,15 +419,36 @@ func ConvertTrendyolToProduct(item *TrendyolResponse) []Product {
 	return products
 }
 
+// Utility function to find an available port
+func findAvailablePort(basePort int, serviceName string) int {
+	port := basePort
+	maxAttempts := 10 // Try up to 10 ports
+
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		addr := fmt.Sprintf(":%d", port)
+		listener, err := net.Listen("tcp", addr)
+		if err == nil {
+			// Found an available port
+			listener.Close()
+			log.Printf("%s using port %d", serviceName, port)
+			return port
+		}
+
+		log.Printf("Port %d is in use, trying port %d for %s", port, port+1, serviceName)
+		port++
+	}
+
+	log.Printf("Failed to find available port after %d attempts for %s, using %d", maxAttempts, serviceName, port)
+	return port
+}
+
 // Crawler Service
 func startCrawlerService() {
 	e := echo.New()
 	producer := setupKafkaProducer()
 
-	port := os.Getenv("CRAWLER_PORT")
-	if port == "" {
-		port = "8080"
-	}
+	// Find available port for HTTP server
+	port := findAvailablePort(8080, "Crawler HTTP")
 
 	e.GET("/fetch", func(c echo.Context) error {
 		// Read mock products from data.json
@@ -445,7 +463,7 @@ func startCrawlerService() {
 		}
 
 		msg := &sarama.ProducerMessage{
-			Topic: "products",
+			Topic: "PRODUCTS",
 			Value: sarama.ByteEncoder(productsJSON),
 		}
 
@@ -590,7 +608,8 @@ func startCrawlerService() {
 		log.Fatal(s.Serve(lis))
 	}()
 
-	e.Logger.Fatal(e.Start(":" + port))
+	// Start the HTTP server on the available port
+	e.Logger.Fatal(e.Start(fmt.Sprintf(":%d", port)))
 }
 
 // Product Analysis Service
@@ -602,7 +621,7 @@ func startProductAnalysisService() {
 	if productsTopic == "" {
 		productsTopic = "PRODUCTS"
 	}
-	
+
 	favoritesTopic := os.Getenv("KAFKA_FAVORITES_TOPIC")
 	if favoritesTopic == "" {
 		favoritesTopic = "FAVORITE_PRODUCTS"
@@ -631,7 +650,7 @@ func startProductAnalysisService() {
 			} else {
 				// Update existing product WITHOUT creating logs
 				log.Printf("Updating existing product: %s", p.Name)
-				
+
 				// Check stock status for is_active flag
 				var stockInfo map[string]interface{}
 				if err := json.Unmarshal(p.StockInfo, &stockInfo); err == nil {
@@ -641,7 +660,7 @@ func startProductAnalysisService() {
 						log.Printf("Setting product %s as inactive due to zero stock", p.Name)
 					}
 				}
-				
+
 				// Just update the product, no logging
 				db.Model(&existing).Updates(map[string]interface{}{
 					"name":                p.Name,
@@ -704,38 +723,40 @@ func startProductAnalysisService() {
 func startNotificationService() {
 	e := echo.New()
 
-	port := os.Getenv("NOTIFICATION_PORT")
-	if port == "" {
-		port = "8082"
-	}
+	// Find available port for HTTP server
+	port := findAvailablePort(8082, "Notification HTTP")
 
 	go func() {
 		s, lis := startGRPCServer("notification")
 		log.Fatal(s.Serve(lis))
 	}()
 
-	e.Logger.Fatal(e.Start(":" + port))
+	// Start the HTTP server on the available port
+	e.Logger.Fatal(e.Start(fmt.Sprintf(":%d", port)))
 }
 
-// gRPC Server Setup (Simplified for brevity)
+// gRPC Server Setup with port conflict handling
 func startGRPCServer(service string) (*grpc.Server, net.Listener) {
-	var port string
+	var basePort int
+	var serviceName string
+
 	if service == "crawler" {
-		port = os.Getenv("CRAWLER_GRPC_PORT")
-		if port == "" {
-			port = "8081"
-		}
+		basePort = 8081
+		serviceName = "Crawler gRPC"
 	} else if service == "notification" {
-		port = os.Getenv("NOTIFICATION_GRPC_PORT")
-		if port == "" {
-			port = "8083"
-		}
+		basePort = 8083
+		serviceName = "Notification gRPC"
 	}
 
-	lis, err := net.Listen("tcp", ":"+port)
+	// Find available port
+	port := findAvailablePort(basePort, serviceName)
+
+	// Try to listen on the port
+	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("Failed to listen on port %d: %v", port, err)
 	}
+
 	s := grpc.NewServer()
 	if service == "crawler" {
 		crawlerServer := &CrawlerServer{}
@@ -748,6 +769,8 @@ func startGRPCServer(service string) (*grpc.Server, net.Listener) {
 		}
 		pb.RegisterNotificationServiceServer(s, notificationServer)
 	}
+
+	log.Printf("Starting %s service on port %d", serviceName, port)
 	return s, lis
 }
 
@@ -1093,7 +1116,7 @@ func (es *EmailService) SendPriceDropNotification(userID uint, productID uint, o
 // FavoriteProductService handles priority updates and notifications for favorited products
 func startFavoriteProductService() {
 	db := setupDB()
-	
+
 	// Verify database connection
 	sqlDB, err := db.DB()
 	if err != nil {
@@ -1102,34 +1125,34 @@ func startFavoriteProductService() {
 	if err := sqlDB.Ping(); err != nil {
 		log.Fatal("Failed to ping database in Favorite Product Service:", err)
 	}
-	
+
 	log.Println("Starting Favorite Product Service...")
-	
+
 	// Connect to notification service via gRPC
-	conn, err := grpc.DialContext(context.Background(), 
+	conn, err := grpc.DialContext(context.Background(),
 		fmt.Sprintf("localhost:%s", os.Getenv("NOTIFICATION_GRPC_PORT")),
 		grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		log.Fatal("Failed to connect to notification service:", err)
 	}
 	notificationClient := pb.NewNotificationServiceClient(conn)
-	
+
 	// Get topic from environment
 	favoritesTopic := os.Getenv("KAFKA_FAVORITES_TOPIC")
 	if favoritesTopic == "" {
 		favoritesTopic = "FAVORITE_PRODUCTS"
 	}
-	
+
 	// Consume messages from FAVORITE_PRODUCTS topic
 	setupKafkaConsumer(favoritesTopic, func(data []byte) {
 		log.Printf("Received favorited product update")
-		
+
 		var products []Product
 		if err := json.Unmarshal(data, &products); err != nil {
 			log.Printf("Error unmarshaling favorited products: %v", err)
 			return
 		}
-		
+
 		for _, updatedProduct := range products {
 			// Find the existing product in the database
 			var existingProduct Product
@@ -1137,47 +1160,47 @@ func startFavoriteProductService() {
 				log.Printf("Error finding existing product %d: %v", updatedProduct.ID, err)
 				continue
 			}
-			
+
 			// Extract price and stock information for comparison
 			var oldPriceInfo, newPriceInfo map[string]interface{}
 			var oldStockInfo, newStockInfo map[string]interface{}
-			
+
 			if err := json.Unmarshal(existingProduct.PriceInfo, &oldPriceInfo); err != nil {
 				log.Printf("Error unmarshaling old price: %v", err)
 				continue
 			}
-			
+
 			if err := json.Unmarshal(updatedProduct.PriceInfo, &newPriceInfo); err != nil {
 				log.Printf("Error unmarshaling new price: %v", err)
 				continue
 			}
-			
+
 			if err := json.Unmarshal(existingProduct.StockInfo, &oldStockInfo); err != nil {
 				log.Printf("Error unmarshaling old stock: %v", err)
 				continue
 			}
-			
+
 			if err := json.Unmarshal(updatedProduct.StockInfo, &newStockInfo); err != nil {
 				log.Printf("Error unmarshaling new stock: %v", err)
 				continue
 			}
-			
+
 			// Check for price and stock changes
 			oldPrice, oldPriceOk := oldPriceInfo["price"].(float64)
 			newPrice, newPriceOk := newPriceInfo["price"].(float64)
 			oldStock, oldStockOk := oldStockInfo["stock"].(float64)
 			newStock, newStockOk := newStockInfo["stock"].(float64)
-			
+
 			if !oldPriceOk || !newPriceOk || !oldStockOk || !newStockOk {
 				log.Printf("Could not extract price or stock values as float64")
 				continue
 			}
-			
+
 			// Log changes to PriceStockLog ONLY for favorited products
 			if oldPrice != newPrice || oldStock != newStock {
-				log.Printf("Detected change for FAVORITED product %d (%s): Price: %.2f -> %.2f, Stock: %.0f -> %.0f", 
+				log.Printf("Detected change for FAVORITED product %d (%s): Price: %.2f -> %.2f, Stock: %.0f -> %.0f",
 					existingProduct.ID, existingProduct.Name, oldPrice, newPrice, oldStock, newStock)
-				
+
 				// Create a log entry
 				priceLog := PriceStockLog{
 					ProductID:  existingProduct.ID,
@@ -1188,26 +1211,26 @@ func startFavoriteProductService() {
 					ChangeTime: time.Now(),
 				}
 				db.Create(&priceLog)
-				
+
 				// Update the product in database
 				db.Model(&existingProduct).Updates(map[string]interface{}{
 					"price_info": updatedProduct.PriceInfo,
 					"stock_info": updatedProduct.StockInfo,
 				})
-				
+
 				// If price dropped, notify users who favorited this product
 				if newPrice < oldPrice {
 					log.Printf("Price drop detected for favorited product %s! Notifying users...", existingProduct.Name)
-					
+
 					// Find all users who favorited this product
 					var favorites []UserFavorite
 					if err := db.Where("product_id = ?", existingProduct.ID).Find(&favorites).Error; err != nil {
 						log.Printf("Error finding favorites for product %d: %v", existingProduct.ID, err)
 						continue
 					}
-					
+
 					log.Printf("Found %d users who favorited product %d", len(favorites), existingProduct.ID)
-					
+
 					// Notify each user about the price drop
 					for _, favorite := range favorites {
 						var user User
@@ -1215,19 +1238,19 @@ func startFavoriteProductService() {
 							log.Printf("Error finding user %d: %v", favorite.UserID, err)
 							continue
 						}
-						
+
 						// Send notification via gRPC
-						_, err := notificationClient.SendNotification(context.Background(), 
+						_, err := notificationClient.SendNotification(context.Background(),
 							&pb.NotificationRequest{
 								UserId:    fmt.Sprintf("%d", user.ID),
 								ProductId: uint32(existingProduct.ID),
 								Message:   fmt.Sprintf("Price dropped from %.2f to %.2f for %s!", oldPrice, newPrice, existingProduct.Name),
 							})
-						
+
 						if err != nil {
 							log.Printf("Error sending notification to user %d: %v", user.ID, err)
 						} else {
-							log.Printf("Notification sent to user %d (%s) about price drop for %s", 
+							log.Printf("Notification sent to user %d (%s) about price drop for %s",
 								user.ID, user.Email, existingProduct.Name)
 						}
 					}
@@ -1237,31 +1260,31 @@ func startFavoriteProductService() {
 			}
 		}
 	})
-	
+
 	// This section remains the same - periodically check for favorited products
 	go func() {
 		for {
 			log.Println("Checking for favorited products prioritization...")
-			
+
 			// Find all products that are favorited by any user
 			var favoriteProductIDs []uint
 			err := db.Model(&UserFavorite{}).
 				Distinct("product_id").
 				Pluck("product_id", &favoriteProductIDs).Error
-			
+
 			if err != nil {
 				log.Printf("Error finding favorited product IDs: %v", err)
 				time.Sleep(5 * time.Minute)
 				continue
 			}
-			
+
 			if len(favoriteProductIDs) > 0 {
 				log.Printf("Found %d favorite products to prioritize", len(favoriteProductIDs))
-				
+
 				// Get all favorited products
 				var favoritedProducts []Product
 				db.Where("id IN ?", favoriteProductIDs).Find(&favoritedProducts)
-				
+
 				// TODO: Implement fetching fresh data from API for each product
 				// For now, we'll just log that we're prioritizing them
 				for _, product := range favoritedProducts {
@@ -1270,7 +1293,7 @@ func startFavoriteProductService() {
 			} else {
 				log.Println("No favorited products found")
 			}
-			
+
 			// Wait before checking again
 			time.Sleep(15 * time.Minute)
 		}
