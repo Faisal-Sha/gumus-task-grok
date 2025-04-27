@@ -507,7 +507,7 @@
                 "inStock": true,
                 "isGlobalBrand": false,
                 "isOneSizeProduct": false,
-                "isPeopleLikeThisProduct": false,
+                "isPeopleLikeThisProduct": true,
                 "isRefundable": true,
                 "merchantListingsWithoutWinner": [
                     {
@@ -1351,13 +1351,13 @@
                             "buyingPriceText": "10.51",
                             "currency": "AED",
                             "discountPercentage": 0,
-                            "discountedPrice": 54.72,
+                            "discountedPrice": 53.72,
                             "discountedPriceText": "54.72",
                             "originalPrice": 23.39,
                             "originalPriceText": "23.39",
                             "profitMargin": 0,
                             "rrp": 0,
-                            "sellingPrice": 70.17,
+                            "sellingPrice": 69,
                             "sellingPriceText": "70.17"
                         },
                         "quantity": 2,
@@ -1381,7 +1381,7 @@
                         "shippedFromStorefront": 36,
                         "stock": {
                             "disabled": false,
-                            "quantity": 2
+                            "quantity": 5
                         },
                         "stockStorefrontId": 36,
                         "variantAttributes": {
@@ -1458,8 +1458,8 @@
                         "originalPriceText": "23.39",
                         "profitMargin": 0,
                         "rrp": 0,
-                        "sellingPrice": 70.17,
-                        "sellingPriceText": "70.17"
+                        "sellingPrice": 69.97,
+                        "sellingPriceText": "70.00"
                     },
                     "quantity": 2,
                     "recommendedRetailPrice": {
@@ -1903,7 +1903,7 @@
                 "inStock": true,
                 "isGlobalBrand": false,
                 "isOneSizeProduct": false,
-                "isPeopleLikeThisProduct": false,
+                "isPeopleLikeThisProduct": true,
                 "isRefundable": true,
                 "merchantListingsWithoutWinner": [],
                 "name": "Blue Pearl Detailed Cotton Woven Shirt TCTSS24TG00032",
