@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -29,18 +30,10 @@ import (
 	"gorm.io/datatypes"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
-)
 
-// PriceStockLog logs price and stock changes
-type PriceStockLog struct {
-	gorm.Model
-	ProductID  uint
-	OldPrice   string
-	NewPrice   string
-	OldStock   string
-	NewStock   string
-	ChangeTime time.Time
-}
+	// Add models import
+	"scraper/models"
+)
 
 // Crawler Service gRPC definition
 type CrawlerServiceClient interface {
@@ -110,13 +103,13 @@ func setupDB() *gorm.DB {
 	}
 
 	// Migrate all tables
-	db.AutoMigrate(&Product{}, &PriceStockLog{}, &User{}, &UserFavorite{})
+	db.AutoMigrate(&models.Product{}, &models.PriceStockLog{}, &models.User{}, &models.UserFavorite{})
 
 	// Create a default user if none exists
 	var count int64
-	db.Model(&User{}).Count(&count)
+	db.Model(&models.User{}).Count(&count)
 	if count == 0 {
-		db.Create(&User{
+		db.Create(&models.User{
 			Email:    "usmaaslam187@gmail.com",
 			Username: "admin",
 			Password: "admin123", // In production, use bcrypt to hash passwords
@@ -176,141 +169,70 @@ func setupKafkaConsumer(topic string, handler func([]byte)) {
 		}
 	}()
 }
+func fetchProductDetails(productID int) map[string]interface{} {
+	url := fmt.Sprintf("https://apigw.trendyol.com/discovery-sfint-product-service/api/product-detail/?contentId=%d&campaignId=null&storefrontId=36&culture=en-AE", productID) // Replace with real API
 
-// Product represents the product data structure
-type Product struct {
-	gorm.Model
-	ID                 uint `gorm:"primaryKey"`
-	CategoryPath       string
-	Name               string
-	Images             datatypes.JSON `gorm:"type:jsonb"`
-	Video              string
-	Seller             datatypes.JSON `gorm:"type:jsonb"`
-	Brand              datatypes.JSON `gorm:"type:jsonb"`
-	RatingScore        datatypes.JSON `gorm:"type:jsonb"`
-	FavoritesCount     string
-	CommentsCount      string
-	AddToCartEvents    string
-	Views              string
-	Orders             string
-	TopReviews         datatypes.JSON `gorm:"type:jsonb"`
-	SizeRecommendation string
-	EstimatedDelivery  datatypes.JSON `gorm:"type:jsonb"`
-	StockInfo          datatypes.JSON `gorm:"type:jsonb"`
-	PriceInfo          datatypes.JSON `gorm:"type:jsonb"`
-	SimilarProducts    datatypes.JSON `gorm:"type:jsonb"`
-	Attributes         datatypes.JSON `gorm:"type:jsonb"`
-	OtherSellers       datatypes.JSON `gorm:"type:jsonb"`
-	IsActive           bool           `gorm:"default:true"`
-	IsFavorite         bool           `gorm:"default:false"`
+	client := &http.Client{}
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+	req.Header.Set("accept", "application/json")
+	req.Header.Set("accept-language", "en-US,en;q=0.9")
+	req.Header.Set("content-type", "application/json")
+	req.Header.Set("if-none-match", `W/"2b9d-hQQAkXZ6TfXuSxKb4d/3BO1fF/4"`)
+	req.Header.Set("origin", "https://www.trendyol.com")
+	req.Header.Set("priority", "u=1, i")
+	req.Header.Set("sec-ch-ua", `"Google Chrome";v="135", "Not-A.Brand";v="8", "Chromium";v="135"`)
+	req.Header.Set("sec-ch-ua-mobile", "?0")
+	req.Header.Set("sec-ch-ua-platform", `"macOS"`)
+	req.Header.Set("sec-fetch-dest", "empty")
+	req.Header.Set("sec-fetch-mode", "cors")
+	req.Header.Set("sec-fetch-site", "same-site")
+	req.Header.Set("user-agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36")
+	req.Header.Set("cookie", "platform=web; anonUserId=c88ca0a0-202a-11f0-b282-e524755a5054; OptanonAlertBoxClosed=2025-04-23T10:07:40.439Z; pid=c88ca0a0-202a-11f0-b282-e524755a5054; storefrontId=36; countryCode=AE; language=en; _gcl_au=1.1.140209073.1745402880; _scid=kApt02EUMDwDAF4F9vfx7LsfKVHQYORB; _fbp=fb.1.1745402880754.810322442114590411; _ScCbts=%5B%5D; _pin_unauth=dWlkPU5UZ3hNREptTWpJdE1qZ3hPUzAwT0RFMExXSXlOR010TlRreFpESXdOMlZoWTJVNA; _tt_enable_cookie=1; _ttp=01JSH1WRWS90XBGHC34CSJZ9SE_.tt.1; AbTestingCookies=A_82-B_38-C_43-D_9-E_38-F_99-G_63-H_9-I_13-J_94-K_50-L_55-M_17-N_13-O_80; hvtb=1; VisitCount=1; WebAbTesting=A_16-B_93-C_88-D_50-E_32-F_13-G_69-H_13-I_35-J_51-K_50-L_84-M_21-N_65-O_66-P_10-Q_76-R_88-S_88-T_73-U_72-V_88-W_6-X_53-Y_65-Z_31; msearchAb=ABAdvertSlotPeriod_1-ABDsNlp_2-ABQR_B-ABSearchFETestV1_B-ABBSA_D-ABSuggestionLC_B; AbTesting=pdpAiReviewSummaryUat_B-SFWBAA_V1_B-SFWDBSR_A-SFWDQL_B-SFWDRS_A-SFWDSAOFv2_B-SFWDSFAG_B-SFWDTKV2_A-SSTPRFL_B-STSBuynow_B-STSCouponV2_A-STSImageSocialProof_A-STSRecoRR_B-STSRecoSocialProof_A-WCBsQckFiltTestv2_B-WCOnePageCheckout_B-WEBSFAATest1_A-WebSFAATest2_B-WebSFAATest3_A%7C1745405135%7Cc88ca0a0-202a-11f0-b282-e524755a5054; navbarGenderId=1; guest_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1cm46dHJlbmR5b2w6YW5vbmlkIjoiNDMwNmY3M2MyMDQxMTFmMGEwNDNmNjEyMjNiNDc3MGMiLCJyb2xlIjoiYW5vbiIsImF0d3J0bWsiOiI0MzA2ZjczOS0yMDQxLTExZjAtYTA0My1mNjEyMjNiNDc3MGMiLCJhcHBOYW1lIjoidHkiLCJhdWQiOiJzYkF5ell0WCtqaGVMNGlmVld5NXR5TU9MUEpXQnJrYSIsImV4cCI6MTkwMzIwMDUxMSwiaXNzIjoiYXV0aC50cmVuZHlvbC5jb20iLCJuYmYiOjE3NDU0MTI1MTF9.EltSK08NpXAye9_vA86ZAcN_-pIBafYFkFS0uwKe244; csrf-secret=jx65ssufAbKAOyuFhlR442UG; functionalConsent=true; performanceConsent=true; targetingConsent=true; WebRecoTss=collectionRecoVersion%2F1%7CpdpGatewayVersion%2F1%7CsimilarRecoAdsVersion%2F1%7CbasketRecoVersion%2F1%7CsimilarRecoVersion%2F1%7CcompleteTheLookVersion%2F1%7CshopTheLookVersion%2F1%7CcrossRecoAdsVersion%2F1%7CsimilarSameBrandVersion%2F1%7CcrossSameBrandVersion%2F1%7CallInOneRecoVersion%2F1%7CcrossRecoVersion%2F1%7ChomepageVersion%2FfirstComponent%3AinitialNewTest_1.sorter%3AhomepageSorterNewTest_d(M)%7CnavigationSectionVersion%2Fsection%3AazSectionTest_1(M)%7CnavigationSideMenuVersion%2FsideMenu%3AinitialTest_1(M)%7CfirstComponent_V1%2F1%7Csorter_V1%2Fb%7Csection_V1%2F1%7CsideMenu_V1%2F1%7CtopWidgets_V1%2F1; __cf_bm=yAcNpc9.Z023H2FTR6J2dRbKaDczMk24CNVZsuBSnqM-1745517402-1.0.1.1-qjYSPztv9v8GvHS5G0uYTaLZdwoPLOUaz13d12HfxDNO92vJq5WWPX7ZPuSZW4llzjTwiB20ukqB8OOTRtwaJKMxKQA6ZbY2F_GITvRb0yU; _cfuvid=Absmqzycbc8IZ65QvA_J.1CTRkwYDuZ1k_jFWAsDg74-1745517402311-0.0.1.1-604800000; __cflb=04dToYCH9RsdhPpttacYW22gpq3mLXZXuCfT4Kmdad; UserInfo=%7B%22Gender%22%3Anull%2C%22UserTypeStatus%22%3Anull%2C%22ForceSet%22%3Afalse%7D; sid=859166fc-0fcb-478e-a642-7b36856ec13d; _gid=GA1.2.1275501495.1745517404; _dc_gtm_UA-13174585-70=1; ttcsid_CJ5M5PJC77U7DSNBELOG=1745517404716::SmLe8QbNf0ibzXveWLA3.4.1745517406958; ttcsid=1745517404716::bIhYpvqxso6xBLcBmryx.4.1745517406958; tss=firstComponent_V1_1%2Csorter_V1_b%2Csection_V1_1%2CsideMenu_V1_1%2CtopWidgets_V1_1%2CFSA_B%2CProductCardVariantCount_B%2CSuggestionPopular_B%2CRR_2%2CGRRLO_B%2CGRRIn_B%2CVisualCategorySlider_B%2CSuggestionTermActive_B%2CKB_B%2CDGB_B%2CSB_B%2CSuggestion_B%2COFIR_B; _scid_r=rYpt02EUMDwDAF4F9vfx7LsfKVHQYORBse8OXA; _ga=GA1.2.2084360745.1745402880; _uetsid=7c2e4db0213511f0bca4851cb46f5236|1i11fu8|2|fvc|0|1940; _sc_cspv=https%3A%2F%2Ftr.snapchat.com%2Fconfig%2Fcom%2F5df43118-abd2-4cd8-89b9-8cf942d1ee25.js%3Fv%3D3.44.6-2504241707; OptanonConsent=isGpcEnabled=0&datestamp=Thu+Apr+24+2025+22%3A56%3A55+GMT%2B0500+(Pakistan+Standard+Time)&version=202402.1.0&browserGpcFlag=0&isIABGlobal=false&consentId=92cde421-80dd-4b6c-9752-f4bc74338ad3&interactionCount=1&isAnonUser=1&landingPath=NotLandingPage&groups=C0002%3A1%2CC0009%3A1%2CC0007%3A1%2CC0003%3A1%2CC0001%3A1%2CC0004%3A1&hosts=H138%3A1%2CH29%3A1%2CH111%3A1%2CH129%3A1%2CH93%3A1%2CH128%3A1%2CH112%3A1%2CH147%3A1%2CH148%3A1%2CH56%3A1%2CH58%3A1%2CH59%3A1%2CH91%3A1%2CH20%3A1%2CH104%3A1%2CH115%3A1%2CH75%3A1%2CH86%3A1%2CH25%3A1%2CH90%3A1%2CH32%3A1%2CH116%3A1%2CH124%3A1%2CH7%3A1%2CH152%3A1%2CH37%3A1%2CH42%3A1%2CH43%3A1%2CH153%3A1%2CH149%3A1%2CH145%3A1%2CH134%3A1%2CH139%3A1%2CH144%3A1&genVendors=V77%3A1%2CV67%3A1%2CV79%3A1%2CV71%3A1%2CV69%3A1%2CV7%3A1%2CV5%3A1%2CV9%3A1%2CV1%3A1%2CV70%3A1%2CV3%3A1%2CV68%3A1%2CV78%3A1%2CV17%3A1%2CV76%3A1%2CV80%3A1%2CV16%3A1%2CV72%3A1%2CV10%3A1%2CV40%3A1%2C&geolocation=PK%3BPB&AwaitingReconsent=false; cto_bundle=MqRYUl9DNGtMb3BmVDRnNWVnNWJkMTVQcmFHUTIlMkYwdGJSV3NmVTBiWklUM1dsUDQlMkI1M094QjN2QnFtVGNxeXhiWDJzZnc5dm1MckQlMkZYYlNhODAydm1uZkdzMiUyQnNGYnp5TjN1c2lUcndjJTJCdExiRzBjSTRDMXpadXFiNDlBZXhHRnM2eFk5RVdyQ0VwNDA3UTRpbllQaDJrVzElMkJNd1klMkJJRWFaZyUyQnNlZjdRWER6TG5LOVhISG16JTJGUUR0RVFwZDRVSGxza2FoZzFvWXJvbmJWNENJSGtZaGhoY0dBJTNEJTNE; _uetvid=d67945d0202a11f0817e972d9bec397e|19nng9p|1745517415909|2|1|bat.bing.com/p/insights/c/a; _ga_9J2BFGDX1E=GS1.1.1745517404.5.1.1745517462.2.0.0")
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer resp.Body.Close()
+	bodyText, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Fatal(err)
+	}
+	var jsonResponse map[string]interface{}
+	if err := json.Unmarshal(bodyText, &jsonResponse); err != nil {
+		log.Fatal(err)
+	}
+	return jsonResponse
 }
+func findAvailablePort(basePort int, serviceName string) int {
+	port := basePort
+	maxAttempts := 10 // Try up to 10 ports
 
-type TrendyolResponse struct {
-	Data struct {
-		Contents []struct {
-			ID          int    `json:"id"`
-			Name        string `json:"name"`
-			ProductCode string `json:"productCode"`
-			InStock     bool   `json:"inStock"`
-			AllVariants []struct {
-				Barcode    string  `json:"barcode"`
-				Currency   string  `json:"currency"`
-				InStock    bool    `json:"inStock"`
-				ItemNumber int     `json:"itemNumber"`
-				Price      float64 `json:"price"`
-				Value      string  `json:"value"`
-			} `json:"allVariants"`
-			IsFavorited bool `json:"isPeopleLikeThisProduct"`
-			Brand       struct {
-				ID   int    `json:"id"`
-				Name string `json:"name"`
-			} `json:"brand"`
-			Category struct {
-				Hierarchy string `json:"hierarchy"`
-				ID        int    `json:"id"`
-				Name      string `json:"name"`
-			} `json:"category"`
-			RatingScore struct {
-				AverageRating float32 `json:"averageRating"`
-				TotalCount    int     `json:"totalCount"`
-				CommentCount  int     `json:"commentCount"`
-			} `json:"ratingScore"`
-			WinnerVariant struct {
-				Price struct {
-					Currency        string  `json:"currency"`
-					DiscountedPrice float64 `json:"discountedPrice"`
-					SellingPrice    float64 `json:"sellingPrice"`
-				} `json:"price"`
-				Stock struct {
-					Quantity int  `json:"quantity"`
-					Disabled bool `json:"disabled"`
-				} `json:"stock"`
-			} `json:"winnerVariant"`
-			WinnerMerchantListing struct {
-				Merchant struct {
-					ID   int    `json:"id"`
-					Name string `json:"name"`
-				} `json:"merchant"`
-			} `json:"winnerMerchantListing"`
-			Images []struct {
-				Org       string `json:"org"`
-				Preview   string `json:"preview"`
-				MainImage string `json:"mainImage"`
-				Zoom      string `json:"zoom"`
-			} `json:"images"`
-			SellerInfo struct {
-				Address                string `json:"address"`
-				BusinessType           string `json:"businessType"`
-				CodEligible            bool   `json:"codEligible"`
-				OfficialName           string `json:"officialName"`
-				RegisteredEmailAddress string `json:"registeredEmailAddress"`
-				RegistrationNumber     string `json:"registrationNumber"`
-				TaxNumber              string `json:"taxNumber"`
-				TaxOffice              string `json:"taxOffice"`
-			} `json:"sellerInfo"`
-			Delivery struct {
-				DeliveryEndDate   string `json:"deliveryEndDate"`
-				DeliveryStartDate string `json:"deliveryStartDate"`
-			} `json:"winnerMerchantListing"`
-			Attributes []struct {
-				Key   string `json:"key"`
-				Value string `json:"value"`
-				Type  string `json:"type"`
-			} `json:"attributes"`
-			Description struct {
-				ContentDescriptions []struct {
-					Description string `json:"description"`
-					Type        string `json:"type"`
-				} `json:"contentDescriptions"`
-			} `json:"description"`
-			SocialProof []struct {
-				Key   string `json:"key"`
-				Value string `json:"value"`
-			} `json:"socialProof"`
-			OrderCount           int `json:"orderCount"`
-			OtherSellersVariants []struct {
-				Barcode    string  `json:"barcode"`
-				Currency   string  `json:"currency"`
-				InStock    bool    `json:"inStock"`
-				ItemNumber int     `json:"itemNumber"`
-				Price      float64 `json:"price"`
-				Value      string  `json:"value"`
-			} `json:"otherMerchantVariants"`
-		} `json:"contents"`
-		Title        string `json:"title"`
-		RelevancyKey string `json:"relevancyKey"`
-	} `json:"data"`
-	StatusCode int  `json:"statusCode"`
-	IsSuccess  bool `json:"isSuccess"`
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		addr := fmt.Sprintf(":%d", port)
+		listener, err := net.Listen("tcp", addr)
+		if err == nil {
+			// Found an available port
+			listener.Close()
+			log.Printf("%s using port %d", serviceName, port)
+			return port
+		}
+
+		log.Printf("Port %d is in use, trying port %d for %s", port, port+1, serviceName)
+		port++
+	}
+
+	log.Printf("Failed to find available port after %d attempts for %s, using %d", maxAttempts, serviceName, port)
+	return port
 }
-
-// readMockData reads product data from data.json file
-func readMockData() ([]Product, error) {
+func readMockData() ([]models.Product, error) {
 	data, err := os.ReadFile("data.json")
 	if err != nil {
 		return nil, fmt.Errorf("failed to read mock data: %v", err)
 	}
-	var trendyolResp TrendyolResponse
+	var trendyolResp models.TrendyolResponse
 	err = json.Unmarshal(data, &trendyolResp)
 	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal mock data: %v", err)
@@ -318,8 +240,8 @@ func readMockData() ([]Product, error) {
 	return ConvertTrendyolToProduct(&trendyolResp), nil
 }
 
-func ConvertTrendyolToProduct(item *TrendyolResponse) []Product {
-	products := make([]Product, len(item.Data.Contents))
+func ConvertTrendyolToProduct(item *models.TrendyolResponse) []models.Product {
+	products := make([]models.Product, len(item.Data.Contents))
 
 	for i, content := range item.Data.Contents {
 		// Marshal JSON fields
@@ -394,7 +316,7 @@ func ConvertTrendyolToProduct(item *TrendyolResponse) []Product {
 				addToBasket = count.Value
 			}
 		}
-		products[i] = Product{
+		products[i] = models.Product{
 			ID:                uint(content.ID),
 			Name:              content.Name,
 			CategoryPath:      content.Category.Hierarchy,
@@ -421,29 +343,6 @@ func ConvertTrendyolToProduct(item *TrendyolResponse) []Product {
 	return products
 }
 
-// Utility function to find an available port
-func findAvailablePort(basePort int, serviceName string) int {
-	port := basePort
-	maxAttempts := 10 // Try up to 10 ports
-
-	for attempt := 0; attempt < maxAttempts; attempt++ {
-		addr := fmt.Sprintf(":%d", port)
-		listener, err := net.Listen("tcp", addr)
-		if err == nil {
-			// Found an available port
-			listener.Close()
-			log.Printf("%s using port %d", serviceName, port)
-			return port
-		}
-
-		log.Printf("Port %d is in use, trying port %d for %s", port, port+1, serviceName)
-		port++
-	}
-
-	log.Printf("Failed to find available port after %d attempts for %s, using %d", maxAttempts, serviceName, port)
-	return port
-}
-
 // Crawler Service
 func startCrawlerService() {
 	e := echo.New()
@@ -453,12 +352,88 @@ func startCrawlerService() {
 	port := findAvailablePort(8080, "Crawler HTTP")
 
 	e.GET("/fetch", func(c echo.Context) error {
-		// Read mock products from data.json
+		var req struct {
+			Flag bool `json: "flag"`
+		}
+		if err := c.Bind(&req); err != nil {
+			return c.JSON(400, map[string]string{"error": "Invalid request"})
+		}
+		if(req.Flag){
+			client := &http.Client{}
+		start := 1
+		end := 27 //products found on 27th page each page contains 60 products 133*60 = 7980 products
+		file, err := os.Create("data.json")
+		if err != nil {
+			log.Fatal("Failed to create JSON file:", err)
+		}
+		defer file.Close()
+		file.WriteString("[\n")
+		first := true
+		for wc := start; wc <= end; wc++ {
+			url := fmt.Sprintf("https://apigw.trendyol.com/discovery-sfint-browsing-service/api/search-feed/products?source=sr?wc=%d&size=60", wc)
+			fmt.Println("Fetching products for wc:", wc)
+			req, err := http.NewRequest("GET", url, nil)
+			if err != nil {
+				log.Fatal(err)
+			}
+			req.Header.Set("accept", "application/json")
+			req.Header.Set("accept-language", "en-US,en;q=0.9")
+			req.Header.Set("baggage", "ty.kbt.name=ViewSearchResult,ty.platform=Web,ty.business_unit=Core%20Commerce,ty.channel=INT,com.trendyol.observability.business_transaction.name=ViewSearchResult,ty.source.service.name=WEB%20Storefront%20International,ty.source.deployment.environment=production,ty.source.service.version=4f92d141,ty.source.client.path=unknown,ty.source.service.type=client")
+			req.Header.Set("content-type", "application/json")
+			req.Header.Set("origin", "https://www.trendyol.com")
+			req.Header.Set("platform", "Web")
+			req.Header.Set("priority", "u=1, i")
+			req.Header.Set("sec-ch-ua", `"Google Chrome";v="135", "Not-A.Brand";v="8", "Chromium";v="135"`)
+			req.Header.Set("sec-ch-ua-mobile", "?0")
+			req.Header.Set("sec-ch-ua-platform", `"macOS"`)
+			req.Header.Set("sec-fetch-dest", "empty")
+			req.Header.Set("sec-fetch-mode", "cors")
+			req.Header.Set("sec-fetch-site", "same-site")
+			req.Header.Set("user-agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36")
+			req.Header.Set("x-section-id", "null")
+			req.Header.Set("cookie", "csrf_secret=u2ANLHbZzCsSCZr5y4L3ziOG; platform=web; _cfuvid=JS6Mjd5imwMhUE.DEVCgMHGZxxyaowoBsHkO6AJXN.w-1745402857084-0.0.1.1-604800000; anonUserId=c88ca0a0-202a-11f0-b282-e524755a5054; __cflb=04dToYCH9RsdhPpttDDEnPngTWcVjd8n2VS1BNR3Xj; OptanonAlertBoxClosed=2025-04-23T10:07:40.439Z; pid=c88ca0a0-202a-11f0-b282-e524755a5054; sid=RN4GQHDizD; storefrontId=36; countryCode=AE; language=en; functionalConsent=true; performanceConsent=true; targetingConsent=true; WebRecoTss=similarRecoAdsVersion%2F1%7CallInOneRecoVersion%2F1%7CbasketRecoVersion%2F1%7CshopTheLookVersion%2F1%7CpdpGatewayVersion%2F1%7CsimilarSameBrandVersion%2F1%7CcrossSameBrandVersion%2F1%7CcrossRecoVersion%2F1%7CsimilarRecoVersion%2F1%7CcompleteTheLookVersion%2F1%7CcollectionRecoVersion%2F1%7CcrossRecoAdsVersion%2F1%7CnavigationSideMenuVersion%2FsideMenu%3AinitialTest_1(M)%7ChomepageVersion%2Fsorter%3AhomepageSorterNewTest_d.firstComponent%3AinitialNewTest_1(M)%7CnavigationSectionVersion%2Fsection%3AazSectionTest_1(M)%7CfirstComponent_V1%2F1%7Csorter_V1%2Fb%7Csection_V1%2F1%7CsideMenu_V1%2F1%7CtopWidgets_V1%2F1; UserInfo=%7B%22Gender%22%3Anull%2C%22UserTypeStatus%22%3Anull%2C%22ForceSet%22%3Afalse%7D; navbarGenderId=1; _gcl_au=1.1.140209073.1745402880; tss=firstComponent_V1_1%2Csorter_V1_b%2Csection_V1_1%2CsideMenu_V1_1%2CtopWidgets_V1_1%2CFSA_B%2CProductCardVariantCount_B%2CSuggestionPopular_B%2CRR_2%2CGRRLO_B%2CGRRIn_B%2CVisualCategorySlider_B%2CSuggestionTermActive_B%2CKB_B%2CDGB_B%2CSB_B%2CSuggestion_B%2COFIR_B; _gid=GA1.2.1617466369.1745402880; _scid=kApt02EUMDwDAF4F9vfx7LsfKVHQYORB; _fbp=fb.1.1745402880754.810322442114590411; _ScCbts=%5B%5D; _pin_unauth=dWlkPU5UZ3hNREptTWpJdE1qZ3hPUzAwT0RFMExXSXlOR010TlRreFpESXdOMlZoWTJVNA; _tt_enable_cookie=1; _ttp=01JSH1WRWS90XBGHC34CSJZ9SE_.tt.1; AbTestingCookies=A_82-B_38-C_43-D_9-E_38-F_99-G_63-H_9-I_13-J_94-K_50-L_55-M_17-N_13-O_80; hvtb=1; VisitCount=1; SearchMode=1; WebAbTesting=A_16-B_93-C_88-D_50-E_32-F_13-G_69-H_13-I_35-J_51-K_50-L_84-M_21-N_65-O_66-P_10-Q_76-R_88-S_88-T_73-U_72-V_88-W_6-X_53-Y_65-Z_31; ForceUpdateSearchAbDecider=forced; WebRecoAbDecider=ABbasketRecoVersion_1-ABcrossRecoVersion_1-ABcrossRecoAdsVersion_1-ABsimilarRecoVersion_1-ABsimilarSameBrandVersion_1-ABcrossSameBrandVersion_1-ABpdpGatewayVersion_1-ABallInOneRecoVersion_1-ABattributeRecoVersion_1-ABcollectionRecoVersion_1-ABshopTheLookVersion_1-ABsimilarRecoAdsVersion_1-ABcompleteTheLookVersion_1-ABhomepageVersion_firstComponent%3AinitialNewTest_1.performanceSorting%3AinitialTest_3.sorter%3AhomepageSorterNewTest_d%28M%29-ABnavigationSideMenuVersion_sideMenu%3AinitialTest_1%28M%29-ABnavigationSectionVersion_section%3AazSectionTest_1%28M%29; FirstSession=0; msearchAb=ABAdvertSlotPeriod_1-ABDsNlp_2-ABQR_B-ABSearchFETestV1_B-ABBSA_D-ABSuggestionLC_B; WebAbDecider=ABres_B-ABBMSA_B-ABRRIn_B-ABSCB_B-ABSuggestionHighlight_B-ABBP_A-ABCatTR_B-ABSuggestionTermActive_A-ABAZSmartlisting_63-ABBH2_B-ABMB_B-ABMRF_1-ABARR_B-ABMA_B-ABSP_B-ABPastSearches_B-ABSuggestionJFYProducts_B-ABSuggestionQF_B-ABBadgeBoost_A-ABRelevancy_1-ABFilterRelevancy_1-ABSuggestionBadges_B-ABProductGroupTopPerformer_B-ABOpenFilterToggle_2-ABRR_2-ABBS_2-ABSuggestionPopularCTR_B; AbTesting=pdpAiReviewSummaryUat_B-SFWBAA_V1_B-SFWDBSR_A-SFWDQL_B-SFWDRS_A-SFWDSAOFv2_B-SFWDSFAG_B-SFWDTKV2_A-SSTPRFL_B-STSBuynow_B-STSCouponV2_A-STSImageSocialProof_A-STSRecoRR_B-STSRecoSocialProof_A-WCBsQckFiltTestv2_B-WCOnePageCheckout_B-WEBSFAATest1_A-WebSFAATest2_B-WebSFAATest3_A%7C1745405135%7Cc88ca0a0-202a-11f0-b282-e524755a5054; __cf_bm=NWXTz_0PnBOy.pCO9V30IFpkTw2Qo2Rje1YU4o55T9k-1745403356-1.0.1.1-iyIpH5eFby7QY4AOTWZym26XHjefMDMuC379iE7HNBCR9f5EbPoplMYfMFa5Me.CvsRrbR079unZJVptaKiMm4qrDsLxMA1Jbq3tngIegkc; _ga_9J2BFGDX1E=GS1.1.1745402880.1.1.1745403367.7.0.0; _scid_r=qopt02EUMDwDAF4F9vfx7LsfKVHQYORBse8OLA; _ga=GA1.2.2084360745.1745402880; _dc_gtm_UA-13174585-70=1; _sc_cspv=https%3A%2F%2Ftr.snapchat.com%2Fconfig%2Fcom%2F5df43118-abd2-4cd8-89b9-8cf942d1ee25.js%3Fv%3D3.44.3-2504222057; OptanonConsent=isGpcEnabled=0&datestamp=Wed+Apr+23+2025+15%3A16%3A07+GMT%2B0500+(Pakistan+Standard+Time)&version=202402.1.0&browserGpcFlag=0&isIABGlobal=false&consentId=92cde421-80dd-4b6c-9752-f4bc74338ad3&interactionCount=1&isAnonUser=1&landingPath=NotLandingPage&groups=C0002%3A1%2CC0009%3A1%2CC0007%3A1%2CC0003%3A1%2CC0001%3A1%2CC0004%3A1&hosts=H138%3A1%2CH29%3A1%2CH111%3A1%2CH129%3A1%2CH93%3A1%2CH128%3A1%2CH112%3A1%2CH147%3A1%2CH148%3A1%2CH56%3A1%2CH58%3A1%2CH59%3A1%2CH91%3A1%2CH20%3A1%2CH104%3A1%2CH115%3A1%2CH75%3A1%2CH86%3A1%2CH25%3A1%2CH90%3A1%2CH32%3A1%2CH116%3A1%2CH124%3A1%2CH7%3A1%2CH152%3A1%2CH37%3A1%2CH42%3A1%2CH43%3A1%2CH153%3A1%2CH149%3A1%2CH145%3A1%2CH134%3A1%2CH139%3A1%2CH144%3A1&genVendors=V77%3A1%2CV67%3A1%2CV79%3A1%2CV71%3A1%2CV69%3A1%2CV7%3A1%2CV5%3A1%2CV9%3A1%2CV1%3A1%2CV70%3A1%2CV3%3A1%2CV68%3A1%2CV78%3A1%2CV17%3A1%2CV76%3A1%2CV80%3A1%2CV16%3A1%2CV72%3A1%2CV10%3A1%2CV40%3A1%2C&geolocation=PK%3BPB&AwaitingReconsent=false; _uetsid=d6791910202a11f097b9bfaf0c52dfc1|n1586e|2|fvb|0|1939; cto_bundle=Bag8ol9DNGtMb3BmVDRnNWVnNWJkMTVQcmFDb0olMkYlMkIwNmZuZGpqR2JqS2VmamxjZWltJTJCWEUxdmw3cXJwTWhEeGFzelBNdU83dXFjSG1CemZpOFJrVkpFJTJGelMyNEk0SkhWZG9DcyUyQnZmYlpmM0JBd1JLMDg2TmIzYzR3MDJMMDdDczJaaHRnQnpoWCUyRm1ib1RHTGV1QzZVTVlqOGNOQm51THYwSEdmeUI5aVZENDdDeVhuRkslMkJtUkJwV2Q5cm1NYWlyQWFwaTFrY3c2cmtZWiUyRm8xN05QNVZEZiUyRmRBJTNEJTNE; ttcsid=1745402880923::pm5yFa6t5a51-RWmpBHn.1.1745403368456; ttcsid_CJ5M5PJC77U7DSNBELOG=1745402880923::I82TPjx5GfCIEgRdpsw1.1.1745403368663; _uetvid=d67945d0202a11f0817e972d9bec397e|1jcuqwt|1745403369059|3|1|bat.bing.com/p/insights/c/u")
+			resp, err := client.Do(req)
+			if err != nil {
+				log.Fatal(err)
+			}
+			defer resp.Body.Close()
+			bodyText, err := io.ReadAll(resp.Body)
+			if err != nil {
+				log.Fatal(err)
+			}
+			var result models.Root
+			if err := json.Unmarshal(bodyText, &result); err != nil {
+				log.Fatal(err)
+			}
+			fmt.Println("Total products found:", len(result.Data.Contents))
+			if len(result.Data.Contents) == 0 {
+				fmt.Println("No more products found ")
+				continue
+			}
+			for _, p := range result.Data.Contents {
+				time.Sleep(4 * time.Second)
+				fmt.Println("Fetching details for product ID:", p.ID)
+				detailedProduct := fetchProductDetails(p.ID)
+				encoder := json.NewEncoder(file)
+				if !first {
+					file.WriteString(",\n")
+				}
+				first = false
+				if err := encoder.Encode(detailedProduct); err != nil {
+					log.Printf("Failed to write product ID %d to file: %v", p.ID, err)
+					continue
+				}
+			}
+		}
+
+		file.WriteString("\n]")
+		fmt.Println("Done!")
+		}
+		
 		mockProducts, err := readMockData()
 		if err != nil {
 			return c.JSON(500, map[string]string{"error": fmt.Sprintf("Failed to read mock data: %v", err)})
 		}
-
 		productsJSON, err := json.Marshal(mockProducts)
 		if err != nil {
 			return c.JSON(500, map[string]string{"error": "Failed to marshal products"})
@@ -551,25 +526,21 @@ func startCrawlerService() {
 
 		// Check if user with this email already exists
 		var count int64
-		db.Model(&User{}).Where("email = ?", req.Email).Count(&count)
+		db.Model(&models.User{}).Where("email = ?", req.Email).Count(&count)
 		if count > 0 {
 			return c.JSON(409, map[string]string{"error": "User with this email already exists"})
 		}
 
 		// Check if username is taken
-		db.Model(&User{}).Where("username = ?", req.Username).Count(&count)
+		db.Model(&models.User{}).Where("username = ?", req.Username).Count(&count)
 		if count > 0 {
 			return c.JSON(409, map[string]string{"error": "Username is already taken"})
 		}
 
-		// Create the user
-		// In production, hash the password before storing
-		// passwordHash, _ := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
-
-		user := User{
+		user := models.User{
 			Email:       req.Email,
 			Username:    req.Username,
-			Password:    req.Password, // Should use passwordHash in production
+			Password:    req.Password,
 			Name:        req.Name,
 			IsActive:    true,
 			LastLoginAt: time.Now(),
@@ -594,7 +565,7 @@ func startCrawlerService() {
 
 		db := setupDB()
 
-		var user User
+		var user models.User
 		if err := db.First(&user, id).Error; err != nil {
 			return c.JSON(404, map[string]string{"error": "User not found"})
 		}
@@ -653,17 +624,17 @@ func startProductAnalysisService() {
 
 	setupKafkaConsumer(productsTopic, func(data []byte) {
 		log.Printf("Product Analysis Service received product data")
-		var products []Product
+		var products []models.Product
 		if err := json.Unmarshal(data, &products); err != nil {
 			log.Printf("Error unmarshaling products: %v", err)
 			return
 		}
 		log.Printf("Product Analysis Service received product data `%s`", string(data))
-		var favoritedProducts []Product // For collecting favorites
+		var favoritedProducts []models.Product // For collecting favorites
 
 		for _, p := range products {
 			// Check if product already exists - EXISTING PRODUCT path
-			var existing Product
+			var existing models.Product
 			result := db.First(&existing, p.ID)
 
 			if result.Error != nil {
@@ -674,7 +645,7 @@ func startProductAnalysisService() {
 
 					// Check if newly created product should go to Favorite service
 					var favoriteCount int64
-					db.Model(&UserFavorite{}).Where("product_id = ?", p.ID).Count(&favoriteCount)
+					db.Model(&models.UserFavorite{}).Where("product_id = ?", p.ID).Count(&favoriteCount)
 					if favoriteCount > 0 && p.IsActive && p.IsFavorite {
 						favoritedProducts = append(favoritedProducts, p)
 					}
@@ -699,7 +670,7 @@ func startProductAnalysisService() {
 				isFavorited := false
 				if p.IsFavorite && p.IsActive {
 					var favoriteCount int64
-					db.Model(&UserFavorite{}).Where("product_id = ?", p.ID).Count(&favoriteCount)
+					db.Model(&models.UserFavorite{}).Where("product_id = ?", p.ID).Count(&favoriteCount)
 					if favoriteCount > 0 {
 						isFavorited = true
 						log.Printf("[Product Analysis] FAVORITED PRODUCT: %s (ID: %d) - Forwarding to Favorite Service", p.Name, p.ID)
@@ -828,21 +799,21 @@ type CrawlerServer struct {
 	pb.UnimplementedCrawlerServiceServer
 }
 
-func (s *CrawlerServer) FetchProducts(ctx context.Context, in *pb.FetchRequest) (*pb.FetchResponse, error) {
-	// Read mock data from data.json
-	mockProducts, err := readMockData()
-	if err != nil {
-		return nil, fmt.Errorf("failed to read mock data: %v", err)
-	}
+// func (s *CrawlerServer) FetchProducts(ctx context.Context, in *pb.FetchRequest) (*pb.FetchResponse, error) {
+// 	// Read mock data from data.json
+// 	mockProducts, err := readMockData()
+// 	if err != nil {
+// 		return nil, fmt.Errorf("failed to read mock data: %v", err)
+// 	}
 
-	// Convert mock products to JSON
-	productsJSON, err := json.Marshal(mockProducts)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal mock products: %v", err)
-	}
+// 	// Convert mock products to JSON
+// 	productsJSON, err := json.Marshal(mockProducts)
+// 	if err != nil {
+// 		return nil, fmt.Errorf("failed to marshal mock products: %v", err)
+// 	}
 
-	return &pb.FetchResponse{Products: productsJSON}, nil
-}
+// 	return &pb.FetchResponse{Products: productsJSON}, nil
+// }
 
 type NotificationServer struct {
 	pb.UnimplementedNotificationServiceServer
@@ -899,7 +870,7 @@ func (s *NotificationServer) SendNotification(ctx context.Context, in *pb.Notifi
 
 // AddFavorite adds a product to a user's favorites
 func AddFavorite(db *gorm.DB, userID, productID uint) error {
-	favorite := UserFavorite{
+	favorite := models.UserFavorite{
 		UserID:    userID,
 		ProductID: productID,
 		AddedAt:   time.Now(),
@@ -911,13 +882,13 @@ func AddFavorite(db *gorm.DB, userID, productID uint) error {
 
 // RemoveFavorite removes a product from a user's favorites
 func RemoveFavorite(db *gorm.DB, userID, productID uint) error {
-	result := db.Where("user_id = ? AND product_id = ?", userID, productID).Delete(&UserFavorite{})
+	result := db.Where("user_id = ? AND product_id = ?", userID, productID).Delete(&models.UserFavorite{})
 	return result.Error
 }
 
 // GetUserFavorites gets all favorite products for a user
-func GetUserFavorites(db *gorm.DB, userID uint) ([]Product, error) {
-	var favorites []UserFavorite
+func GetUserFavorites(db *gorm.DB, userID uint) ([]models.Product, error) {
+	var favorites []models.UserFavorite
 	result := db.Where("user_id = ?", userID).Find(&favorites)
 	if result.Error != nil {
 		return nil, result.Error
@@ -928,7 +899,7 @@ func GetUserFavorites(db *gorm.DB, userID uint) ([]Product, error) {
 		productIDs = append(productIDs, fav.ProductID)
 	}
 
-	var products []Product
+	var products []models.Product
 	result = db.Where("id IN ?", productIDs).Find(&products)
 	return products, result.Error
 }
@@ -936,7 +907,7 @@ func GetUserFavorites(db *gorm.DB, userID uint) ([]Product, error) {
 // IsProductFavorited checks if a product is in a user's favorites
 func IsProductFavorited(db *gorm.DB, userID, productID uint) bool {
 	var count int64
-	db.Model(&UserFavorite{}).Where("user_id = ? AND product_id = ?", userID, productID).Count(&count)
+	db.Model(&models.UserFavorite{}).Where("user_id = ? AND product_id = ?", userID, productID).Count(&count)
 	return count > 0
 }
 
@@ -1049,13 +1020,13 @@ func (es *EmailService) SendPriceDropNotification(userID uint, productID uint, o
 	}
 
 	// Get user email
-	var user User
+	var user models.User
 	if err := es.db.First(&user, userID).Error; err != nil {
 		return false, fmt.Errorf("failed to find user: %w", err)
 	}
 
 	// Get product details
-	var product Product
+	var product models.Product
 	if err := es.db.First(&product, productID).Error; err != nil {
 		return false, fmt.Errorf("failed to find product: %w", err)
 	}
@@ -1200,7 +1171,7 @@ func startFavoriteProductService() {
 	setupKafkaConsumer(favoritesTopic, func(data []byte) {
 		log.Printf("[Favorite Service] Received favorited product update `%s`", string(data))
 
-		var products []Product
+		var products []models.Product
 		if err := json.Unmarshal(data, &products); err != nil {
 			log.Printf("Error unmarshaling favorited products: %v", err)
 			return
@@ -1208,7 +1179,7 @@ func startFavoriteProductService() {
 
 		for _, updatedProduct := range products {
 			// Find the existing product in the database
-			var existingProduct Product
+			var existingProduct models.Product
 			if err := db.First(&existingProduct, updatedProduct.ID).Error; err != nil {
 				log.Printf("Error finding existing product %d: %v", updatedProduct.ID, err)
 				continue
@@ -1246,7 +1217,7 @@ func startFavoriteProductService() {
 			newPrice, newPriceOk := newPriceInfo["originalPrice"].(float64)
 			oldStock, oldStockOk := oldStockInfo["stock"].(float64)
 			newStock, newStockOk := newStockInfo["stock"].(float64)
-			
+
 			if !oldPriceOk || !newPriceOk || !oldStockOk || !newStockOk {
 				log.Printf("Could not extract price or stock values as float64")
 				continue
@@ -1258,7 +1229,7 @@ func startFavoriteProductService() {
 					oldPrice, newPrice, oldStock, newStock)
 
 				// Create a log entry
-				priceLog := PriceStockLog{
+				priceLog := models.PriceStockLog{
 					ProductID:  existingProduct.ID,
 					OldPrice:   fmt.Sprintf("%.2f", oldPrice),
 					NewPrice:   fmt.Sprintf("%.2f", newPrice),
@@ -1279,7 +1250,7 @@ func startFavoriteProductService() {
 					log.Printf("[Favorite Service] PRICE DROP DETECTED for %s!", existingProduct.Name)
 
 					// Find all users who favorited this product
-					var favorites []UserFavorite
+					var favorites []models.UserFavorite
 					if err := db.Where("product_id = ?", existingProduct.ID).Find(&favorites).Error; err != nil {
 						log.Printf("Error finding favorites for product %d: %v", existingProduct.ID, err)
 						continue
@@ -1289,7 +1260,7 @@ func startFavoriteProductService() {
 
 					// NOTIFICATION SERVICE step in diagram - notify each user about the price drop
 					for _, favorite := range favorites {
-						var user User
+						var user models.User
 						if err := db.First(&user, favorite.UserID).Error; err != nil {
 							log.Printf("Error finding user %d: %v", favorite.UserID, err)
 							continue
