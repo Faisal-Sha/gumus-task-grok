@@ -13,27 +13,26 @@ import (
 	"strings"
 	"time"
 
-	pb "scraper/proto"
-
-	"bytes"
-	"crypto/tls"
-	"html/template"
-	"net/smtp"
-
-	// "net/smtp"
-
 	"github.com/IBM/sarama"
 	"github.com/joho/godotenv"
 	"github.com/labstack/echo/v4"
+	"github.com/robfig/cron/v3"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"gorm.io/datatypes"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 
-	// Add models import
 	"scraper/models"
+	pb "scraper/proto"
+
+	"bytes"
+	"crypto/tls"
+	"html/template"
+	"net/smtp"
 )
+
+var jobIDs = make(map[string]cron.EntryID)
 
 // Crawler Service gRPC definition
 type CrawlerServiceClient interface {
@@ -169,13 +168,15 @@ func setupKafkaConsumer(topic string, handler func([]byte)) {
 		}
 	}()
 }
+
 func fetchProductDetails(productID int) map[string]interface{} {
-	url := fmt.Sprintf("https://apigw.trendyol.com/discovery-sfint-product-service/api/product-detail/?contentId=%d&campaignId=null&storefrontId=36&culture=en-AE", productID) // Replace with real API
+	url := fmt.Sprintf("https://apigw.trendyol.com/discovery-sfint-product-service/api/product-detail/?contentId=%d&campaignId=null&storefrontId=36&culture=en-AE", productID)
 
 	client := &http.Client{}
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		log.Fatal(err)
+		log.Printf("Error creating request for product %d: %v", productID, err)
+		return nil
 	}
 	req.Header.Set("accept", "application/json")
 	req.Header.Set("accept-language", "en-US,en;q=0.9")
@@ -193,46 +194,48 @@ func fetchProductDetails(productID int) map[string]interface{} {
 	req.Header.Set("cookie", "platform=web; anonUserId=c88ca0a0-202a-11f0-b282-e524755a5054; OptanonAlertBoxClosed=2025-04-23T10:07:40.439Z; pid=c88ca0a0-202a-11f0-b282-e524755a5054; storefrontId=36; countryCode=AE; language=en; _gcl_au=1.1.140209073.1745402880; _scid=kApt02EUMDwDAF4F9vfx7LsfKVHQYORB; _fbp=fb.1.1745402880754.810322442114590411; _ScCbts=%5B%5D; _pin_unauth=dWlkPU5UZ3hNREptTWpJdE1qZ3hPUzAwT0RFMExXSXlOR010TlRreFpESXdOMlZoWTJVNA; _tt_enable_cookie=1; _ttp=01JSH1WRWS90XBGHC34CSJZ9SE_.tt.1; AbTestingCookies=A_82-B_38-C_43-D_9-E_38-F_99-G_63-H_9-I_13-J_94-K_50-L_55-M_17-N_13-O_80; hvtb=1; VisitCount=1; WebAbTesting=A_16-B_93-C_88-D_50-E_32-F_13-G_69-H_13-I_35-J_51-K_50-L_84-M_21-N_65-O_66-P_10-Q_76-R_88-S_88-T_73-U_72-V_88-W_6-X_53-Y_65-Z_31; msearchAb=ABAdvertSlotPeriod_1-ABDsNlp_2-ABQR_B-ABSearchFETestV1_B-ABBSA_D-ABSuggestionLC_B; AbTesting=pdpAiReviewSummaryUat_B-SFWBAA_V1_B-SFWDBSR_A-SFWDQL_B-SFWDRS_A-SFWDSAOFv2_B-SFWDSFAG_B-SFWDTKV2_A-SSTPRFL_B-STSBuynow_B-STSCouponV2_A-STSImageSocialProof_A-STSRecoRR_B-STSRecoSocialProof_A-WCBsQckFiltTestv2_B-WCOnePageCheckout_B-WEBSFAATest1_A-WebSFAATest2_B-WebSFAATest3_A%7C1745405135%7Cc88ca0a0-202a-11f0-b282-e524755a5054; navbarGenderId=1; guest_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1cm46dHJlbmR5b2w6YW5vbmlkIjoiNDMwNmY3M2MyMDQxMTFmMGEwNDNmNjEyMjNiNDc3MGMiLCJyb2xlIjoiYW5vbiIsImF0d3J0bWsiOiI0MzA2ZjczOS0yMDQxLTExZjAtYTA0My1mNjEyMjNiNDc3MGMiLCJhcHBOYW1lIjoidHkiLCJhdWQiOiJzYkF5ell0WCtqaGVMNGlmVld5NXR5TU9MUEpXQnJrYSIsImV4cCI6MTkwMzIwMDUxMSwiaXNzIjoiYXV0aC50cmVuZHlvbC5jb20iLCJuYmYiOjE3NDU0MTI1MTF9.EltSK08NpXAye9_vA86ZAcN_-pIBafYFkFS0uwKe244; csrf-secret=jx65ssufAbKAOyuFhlR442UG; functionalConsent=true; performanceConsent=true; targetingConsent=true; WebRecoTss=collectionRecoVersion%2F1%7CpdpGatewayVersion%2F1%7CsimilarRecoAdsVersion%2F1%7CbasketRecoVersion%2F1%7CsimilarRecoVersion%2F1%7CcompleteTheLookVersion%2F1%7CshopTheLookVersion%2F1%7CcrossRecoAdsVersion%2F1%7CsimilarSameBrandVersion%2F1%7CcrossSameBrandVersion%2F1%7CallInOneRecoVersion%2F1%7CcrossRecoVersion%2F1%7ChomepageVersion%2FfirstComponent%3AinitialNewTest_1.sorter%3AhomepageSorterNewTest_d(M)%7CnavigationSectionVersion%2Fsection%3AazSectionTest_1(M)%7CnavigationSideMenuVersion%2FsideMenu%3AinitialTest_1(M)%7CfirstComponent_V1%2F1%7Csorter_V1%2Fb%7Csection_V1%2F1%7CsideMenu_V1%2F1%7CtopWidgets_V1%2F1; __cf_bm=yAcNpc9.Z023H2FTR6J2dRbKaDczMk24CNVZsuBSnqM-1745517402-1.0.1.1-qjYSPztv9v8GvHS5G0uYTaLZdwoPLOUaz13d12HfxDNO92vJq5WWPX7ZPuSZW4llzjTwiB20ukqB8OOTRtwaJKMxKQA6ZbY2F_GITvRb0yU; _cfuvid=Absmqzycbc8IZ65QvA_J.1CTRkwYDuZ1k_jFWAsDg74-1745517402311-0.0.1.1-604800000; __cflb=04dToYCH9RsdhPpttacYW22gpq3mLXZXuCfT4Kmdad; UserInfo=%7B%22Gender%22%3Anull%2C%22UserTypeStatus%22%3Anull%2C%22ForceSet%22%3Afalse%7D; sid=859166fc-0fcb-478e-a642-7b36856ec13d; _gid=GA1.2.1275501495.1745517404; _dc_gtm_UA-13174585-70=1; ttcsid_CJ5M5PJC77U7DSNBELOG=1745517404716::SmLe8QbNf0ibzXveWLA3.4.1745517406958; ttcsid=1745517404716::bIhYpvqxso6xBLcBmryx.4.1745517406958; tss=firstComponent_V1_1%2Csorter_V1_b%2Csection_V1_1%2CsideMenu_V1_1%2CtopWidgets_V1_1%2CFSA_B%2CProductCardVariantCount_B%2CSuggestionPopular_B%2CRR_2%2CGRRLO_B%2CGRRIn_B%2CVisualCategorySlider_B%2CSuggestionTermActive_B%2CKB_B%2CDGB_B%2CSB_B%2CSuggestion_B%2COFIR_B; _scid_r=rYpt02EUMDwDAF4F9vfx7LsfKVHQYORBse8OXA; _ga=GA1.2.2084360745.1745402880; _uetsid=7c2e4db0213511f0bca4851cb46f5236|1i11fu8|2|fvc|0|1940; _sc_cspv=https%3A%2F%2Ftr.snapchat.com%2Fconfig%2Fcom%2F5df43118-abd2-4cd8-89b9-8cf942d1ee25.js%3Fv%3D3.44.6-2504241707; OptanonConsent=isGpcEnabled=0&datestamp=Thu+Apr+24+2025+22%3A56%3A55+GMT%2B0500+(Pakistan+Standard+Time)&version=202402.1.0&browserGpcFlag=0&isIABGlobal=false&consentId=92cde421-80dd-4b6c-9752-f4bc74338ad3&interactionCount=1&isAnonUser=1&landingPath=NotLandingPage&groups=C0002%3A1%2CC0009%3A1%2CC0007%3A1%2CC0003%3A1%2CC0001%3A1%2CC0004%3A1&hosts=H138%3A1%2CH29%3A1%2CH111%3A1%2CH129%3A1%2CH93%3A1%2CH128%3A1%2CH112%3A1%2CH147%3A1%2CH148%3A1%2CH56%3A1%2CH58%3A1%2CH59%3A1%2CH91%3A1%2CH20%3A1%2CH104%3A1%2CH115%3A1%2CH75%3A1%2CH86%3A1%2CH25%3A1%2CH90%3A1%2CH32%3A1%2CH116%3A1%2CH124%3A1%2CH7%3A1%2CH152%3A1%2CH37%3A1%2CH42%3A1%2CH43%3A1%2CH153%3A1%2CH149%3A1%2CH145%3A1%2CH134%3A1%2CH139%3A1%2CH144%3A1&genVendors=V77%3A1%2CV67%3A1%2CV79%3A1%2CV71%3A1%2CV69%3A1%2CV7%3A1%2CV5%3A1%2CV9%3A1%2CV1%3A1%2CV70%3A1%2CV3%3A1%2CV68%3A1%2CV78%3A1%2CV17%3A1%2CV76%3A1%2CV80%3A1%2CV16%3A1%2CV72%3A1%2CV10%3A1%2CV40%3A1%2C&geolocation=PK%3BPB&AwaitingReconsent=false; cto_bundle=MqRYUl9DNGtMb3BmVDRnNWVnNWJkMTVQcmFHUTIlMkYwdGJSV3NmVTBiWklUM1dsUDQlMkI1M094QjN2QnFtVGNxeXhiWDJzZnc5dm1MckQlMkZYYlNhODAydm1uZkdzMiUyQnNGYnp5TjN1c2lUcndjJTJCdExiRzBjSTRDMXpadXFiNDlBZXhHRnM2eFk5RVdyQ0VwNDA3UTRpbllQaDJrVzElMkJNd1klMkJJRWFaZyUyQnNlZjdRWER6TG5LOVhISG16JTJGUUR0RVFwZDRVSGxza2FoZzFvWXJvbmJWNENJSGtZaGhoY0dBJTNEJTNE; _uetvid=d67945d0202a11f0817e972d9bec397e|19nng9p|1745517415909|2|1|bat.bing.com/p/insights/c/a; _ga_9J2BFGDX1E=GS1.1.1745517404.5.1.1745517462.2.0.0")
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Fatal(err)
+		log.Printf("Error fetching product %d: %v", productID, err)
+		return nil
 	}
 	defer resp.Body.Close()
 	bodyText, err := io.ReadAll(resp.Body)
 	if err != nil {
-		log.Fatal(err)
+		log.Printf("Error reading response for product %d: %v", productID, err)
+		return nil
 	}
 	var jsonResponse map[string]interface{}
 	if err := json.Unmarshal(bodyText, &jsonResponse); err != nil {
-		log.Fatal(err)
+		log.Printf("Error unmarshaling response for product %d: %v", productID, err)
+		return nil
 	}
 	return jsonResponse
 }
+
 func findAvailablePort(basePort int, serviceName string) int {
 	port := basePort
-	maxAttempts := 10 // Try up to 10 ports
+	maxAttempts := 10
 
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		addr := fmt.Sprintf(":%d", port)
 		listener, err := net.Listen("tcp", addr)
 		if err == nil {
-			// Found an available port
 			listener.Close()
 			log.Printf("%s using port %d", serviceName, port)
 			return port
 		}
-
 		log.Printf("Port %d is in use, trying port %d for %s", port, port+1, serviceName)
 		port++
 	}
-
 	log.Printf("Failed to find available port after %d attempts for %s, using %d", maxAttempts, serviceName, port)
 	return port
 }
+
 func readMockData() ([]models.Product, error) {
 	data, err := os.ReadFile("data.json")
 	if err != nil {
 		return nil, fmt.Errorf("failed to read mock data: %v", err)
 	}
-	var trendyolResp models.TrendyolResponse
+	var trendyolResp []models.TrendyolResponse
 	err = json.Unmarshal(data, &trendyolResp)
 	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal mock data: %v", err)
@@ -240,11 +243,10 @@ func readMockData() ([]models.Product, error) {
 	return ConvertTrendyolToProduct(&trendyolResp), nil
 }
 
-func ConvertTrendyolToProduct(item *models.TrendyolResponse) []models.Product {
-	products := make([]models.Product, len(item.Data.Contents))
+func ConvertTrendyolToProduct(item *[]models.TrendyolResponse) []models.Product {
+	products := make([]models.Product, len(*item))
 
-	for i, content := range item.Data.Contents {
-		// Marshal JSON fields
+	for i, content := range *item {
 		ratingJSON, _ := json.Marshal(map[string]interface{}{
 			"averageRating": content.RatingScore.AverageRating,
 			"commentCount":  content.RatingScore.CommentCount,
@@ -255,13 +257,11 @@ func ConvertTrendyolToProduct(item *models.TrendyolResponse) []models.Product {
 			"stock":    content.WinnerVariant.Stock.Quantity,
 			"disabled": content.WinnerVariant.Stock.Disabled,
 		})
-
 		priceJSON, _ := json.Marshal(map[string]interface{}{
 			"price":         content.WinnerVariant.Price.DiscountedPrice,
 			"originalPrice": content.WinnerVariant.Price.SellingPrice,
 			"currency":      content.WinnerVariant.Price.Currency,
 		})
-
 		sellerJSON, _ := json.Marshal(map[string]interface{}{
 			"address":                content.SellerInfo.Address,
 			"businessType":           content.SellerInfo.BusinessType,
@@ -272,12 +272,10 @@ func ConvertTrendyolToProduct(item *models.TrendyolResponse) []models.Product {
 			"taxNumber":              content.SellerInfo.TaxNumber,
 			"taxOffice":              content.SellerInfo.TaxOffice,
 		})
-
 		deliveryJSON, _ := json.Marshal(map[string]interface{}{
 			"deliveryEndDate":   content.Delivery.DeliveryEndDate,
 			"deliveryStartDate": content.Delivery.DeliveryStartDate,
 		})
-
 		otherSellersVariant := make(map[string]interface{})
 		for _, attr := range content.OtherSellersVariants {
 			otherSellersVariant["barcode"] = attr.Barcode
@@ -289,21 +287,16 @@ func ConvertTrendyolToProduct(item *models.TrendyolResponse) []models.Product {
 		}
 		otherSellersVariantsJSON, _ := json.Marshal(otherSellersVariant)
 		brandJSON, _ := json.Marshal(content.Brand)
-
-		// Create attributes map
 		attrMap := make(map[string]interface{})
 		for _, attr := range content.Attributes {
 			attrMap[attr.Key] = attr.Value
 		}
 		attributesJSON, _ := json.Marshal(attrMap)
-
-		// Process images
 		var images []string
 		for _, img := range content.Images {
 			images = append(images, img.MainImage)
 		}
 		imagesJSON, _ := json.Marshal(images)
-
 		var orders, favorites, views, addToBasket string
 		for _, count := range content.SocialProof {
 			if count.Key == "orderCount" {
@@ -338,7 +331,6 @@ func ConvertTrendyolToProduct(item *models.TrendyolResponse) []models.Product {
 			OtherSellers:      datatypes.JSON(otherSellersVariantsJSON),
 		}
 	}
-
 	log.Printf("Converted trendyol response to products `%s`", products)
 	return products
 }
@@ -351,85 +343,104 @@ func startCrawlerService() {
 	// Find available port for HTTP server
 	port := findAvailablePort(8080, "Crawler HTTP")
 
+	// Set up cron scheduler
+	c := cron.New()
+	id, err := c.AddFunc("* * * * *", func() {
+		productIDs, err := fetchProductIDsFromDB()
+		if err != nil {
+			log.Printf("Failed to fetch favorited product IDs: %v", err)
+			return
+		}
+		log.Printf("Found %d active favorited products to update", len(productIDs))
+		if len(productIDs) > 0 {
+			runTask(producer)
+		}
+	})
+	if err != nil {
+		log.Fatal("Invalid cron expression for runTask:", err)
+	}
+	jobIDs["productDetails"] = id
+	c.Start()
+	log.Println("✅ Scheduler started for product details fetching")
+
 	e.GET("/fetch", func(c echo.Context) error {
 		var req struct {
-			Flag bool `json: "flag"`
+			Flag bool `json:"flag"`
 		}
 		if err := c.Bind(&req); err != nil {
 			return c.JSON(400, map[string]string{"error": "Invalid request"})
 		}
-		if(req.Flag){
+		if req.Flag {
 			client := &http.Client{}
-		start := 1
-		end := 27 //products found on 27th page each page contains 60 products 133*60 = 7980 products
-		file, err := os.Create("data.json")
-		if err != nil {
-			log.Fatal("Failed to create JSON file:", err)
-		}
-		defer file.Close()
-		file.WriteString("[\n")
-		first := true
-		for wc := start; wc <= end; wc++ {
-			url := fmt.Sprintf("https://apigw.trendyol.com/discovery-sfint-browsing-service/api/search-feed/products?source=sr?wc=%d&size=60", wc)
-			fmt.Println("Fetching products for wc:", wc)
-			req, err := http.NewRequest("GET", url, nil)
+			start := 1
+			end := 160
+			file, err := os.Create("data.json")
 			if err != nil {
-				log.Fatal(err)
+				log.Fatal("Failed to create JSON file:", err)
 			}
-			req.Header.Set("accept", "application/json")
-			req.Header.Set("accept-language", "en-US,en;q=0.9")
-			req.Header.Set("baggage", "ty.kbt.name=ViewSearchResult,ty.platform=Web,ty.business_unit=Core%20Commerce,ty.channel=INT,com.trendyol.observability.business_transaction.name=ViewSearchResult,ty.source.service.name=WEB%20Storefront%20International,ty.source.deployment.environment=production,ty.source.service.version=4f92d141,ty.source.client.path=unknown,ty.source.service.type=client")
-			req.Header.Set("content-type", "application/json")
-			req.Header.Set("origin", "https://www.trendyol.com")
-			req.Header.Set("platform", "Web")
-			req.Header.Set("priority", "u=1, i")
-			req.Header.Set("sec-ch-ua", `"Google Chrome";v="135", "Not-A.Brand";v="8", "Chromium";v="135"`)
-			req.Header.Set("sec-ch-ua-mobile", "?0")
-			req.Header.Set("sec-ch-ua-platform", `"macOS"`)
-			req.Header.Set("sec-fetch-dest", "empty")
-			req.Header.Set("sec-fetch-mode", "cors")
-			req.Header.Set("sec-fetch-site", "same-site")
-			req.Header.Set("user-agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36")
-			req.Header.Set("x-section-id", "null")
-			req.Header.Set("cookie", "csrf_secret=u2ANLHbZzCsSCZr5y4L3ziOG; platform=web; _cfuvid=JS6Mjd5imwMhUE.DEVCgMHGZxxyaowoBsHkO6AJXN.w-1745402857084-0.0.1.1-604800000; anonUserId=c88ca0a0-202a-11f0-b282-e524755a5054; __cflb=04dToYCH9RsdhPpttDDEnPngTWcVjd8n2VS1BNR3Xj; OptanonAlertBoxClosed=2025-04-23T10:07:40.439Z; pid=c88ca0a0-202a-11f0-b282-e524755a5054; sid=RN4GQHDizD; storefrontId=36; countryCode=AE; language=en; functionalConsent=true; performanceConsent=true; targetingConsent=true; WebRecoTss=similarRecoAdsVersion%2F1%7CallInOneRecoVersion%2F1%7CbasketRecoVersion%2F1%7CshopTheLookVersion%2F1%7CpdpGatewayVersion%2F1%7CsimilarSameBrandVersion%2F1%7CcrossSameBrandVersion%2F1%7CcrossRecoVersion%2F1%7CsimilarRecoVersion%2F1%7CcompleteTheLookVersion%2F1%7CcollectionRecoVersion%2F1%7CcrossRecoAdsVersion%2F1%7CnavigationSideMenuVersion%2FsideMenu%3AinitialTest_1(M)%7ChomepageVersion%2Fsorter%3AhomepageSorterNewTest_d.firstComponent%3AinitialNewTest_1(M)%7CnavigationSectionVersion%2Fsection%3AazSectionTest_1(M)%7CfirstComponent_V1%2F1%7Csorter_V1%2Fb%7Csection_V1%2F1%7CsideMenu_V1%2F1%7CtopWidgets_V1%2F1; UserInfo=%7B%22Gender%22%3Anull%2C%22UserTypeStatus%22%3Anull%2C%22ForceSet%22%3Afalse%7D; navbarGenderId=1; _gcl_au=1.1.140209073.1745402880; tss=firstComponent_V1_1%2Csorter_V1_b%2Csection_V1_1%2CsideMenu_V1_1%2CtopWidgets_V1_1%2CFSA_B%2CProductCardVariantCount_B%2CSuggestionPopular_B%2CRR_2%2CGRRLO_B%2CGRRIn_B%2CVisualCategorySlider_B%2CSuggestionTermActive_B%2CKB_B%2CDGB_B%2CSB_B%2CSuggestion_B%2COFIR_B; _gid=GA1.2.1617466369.1745402880; _scid=kApt02EUMDwDAF4F9vfx7LsfKVHQYORB; _fbp=fb.1.1745402880754.810322442114590411; _ScCbts=%5B%5D; _pin_unauth=dWlkPU5UZ3hNREptTWpJdE1qZ3hPUzAwT0RFMExXSXlOR010TlRreFpESXdOMlZoWTJVNA; _tt_enable_cookie=1; _ttp=01JSH1WRWS90XBGHC34CSJZ9SE_.tt.1; AbTestingCookies=A_82-B_38-C_43-D_9-E_38-F_99-G_63-H_9-I_13-J_94-K_50-L_55-M_17-N_13-O_80; hvtb=1; VisitCount=1; SearchMode=1; WebAbTesting=A_16-B_93-C_88-D_50-E_32-F_13-G_69-H_13-I_35-J_51-K_50-L_84-M_21-N_65-O_66-P_10-Q_76-R_88-S_88-T_73-U_72-V_88-W_6-X_53-Y_65-Z_31; ForceUpdateSearchAbDecider=forced; WebRecoAbDecider=ABbasketRecoVersion_1-ABcrossRecoVersion_1-ABcrossRecoAdsVersion_1-ABsimilarRecoVersion_1-ABsimilarSameBrandVersion_1-ABcrossSameBrandVersion_1-ABpdpGatewayVersion_1-ABallInOneRecoVersion_1-ABattributeRecoVersion_1-ABcollectionRecoVersion_1-ABshopTheLookVersion_1-ABsimilarRecoAdsVersion_1-ABcompleteTheLookVersion_1-ABhomepageVersion_firstComponent%3AinitialNewTest_1.performanceSorting%3AinitialTest_3.sorter%3AhomepageSorterNewTest_d%28M%29-ABnavigationSideMenuVersion_sideMenu%3AinitialTest_1%28M%29-ABnavigationSectionVersion_section%3AazSectionTest_1%28M%29; FirstSession=0; msearchAb=ABAdvertSlotPeriod_1-ABDsNlp_2-ABQR_B-ABSearchFETestV1_B-ABBSA_D-ABSuggestionLC_B; WebAbDecider=ABres_B-ABBMSA_B-ABRRIn_B-ABSCB_B-ABSuggestionHighlight_B-ABBP_A-ABCatTR_B-ABSuggestionTermActive_A-ABAZSmartlisting_63-ABBH2_B-ABMB_B-ABMRF_1-ABARR_B-ABMA_B-ABSP_B-ABPastSearches_B-ABSuggestionJFYProducts_B-ABSuggestionQF_B-ABBadgeBoost_A-ABRelevancy_1-ABFilterRelevancy_1-ABSuggestionBadges_B-ABProductGroupTopPerformer_B-ABOpenFilterToggle_2-ABRR_2-ABBS_2-ABSuggestionPopularCTR_B; AbTesting=pdpAiReviewSummaryUat_B-SFWBAA_V1_B-SFWDBSR_A-SFWDQL_B-SFWDRS_A-SFWDSAOFv2_B-SFWDSFAG_B-SFWDTKV2_A-SSTPRFL_B-STSBuynow_B-STSCouponV2_A-STSImageSocialProof_A-STSRecoRR_B-STSRecoSocialProof_A-WCBsQckFiltTestv2_B-WCOnePageCheckout_B-WEBSFAATest1_A-WebSFAATest2_B-WebSFAATest3_A%7C1745405135%7Cc88ca0a0-202a-11f0-b282-e524755a5054; __cf_bm=NWXTz_0PnBOy.pCO9V30IFpkTw2Qo2Rje1YU4o55T9k-1745403356-1.0.1.1-iyIpH5eFby7QY4AOTWZym26XHjefMDMuC379iE7HNBCR9f5EbPoplMYfMFa5Me.CvsRrbR079unZJVptaKiMm4qrDsLxMA1Jbq3tngIegkc; _ga_9J2BFGDX1E=GS1.1.1745402880.1.1.1745403367.7.0.0; _scid_r=qopt02EUMDwDAF4F9vfx7LsfKVHQYORBse8OLA; _ga=GA1.2.2084360745.1745402880; _dc_gtm_UA-13174585-70=1; _sc_cspv=https%3A%2F%2Ftr.snapchat.com%2Fconfig%2Fcom%2F5df43118-abd2-4cd8-89b9-8cf942d1ee25.js%3Fv%3D3.44.3-2504222057; OptanonConsent=isGpcEnabled=0&datestamp=Wed+Apr+23+2025+15%3A16%3A07+GMT%2B0500+(Pakistan+Standard+Time)&version=202402.1.0&browserGpcFlag=0&isIABGlobal=false&consentId=92cde421-80dd-4b6c-9752-f4bc74338ad3&interactionCount=1&isAnonUser=1&landingPath=NotLandingPage&groups=C0002%3A1%2CC0009%3A1%2CC0007%3A1%2CC0003%3A1%2CC0001%3A1%2CC0004%3A1&hosts=H138%3A1%2CH29%3A1%2CH111%3A1%2CH129%3A1%2CH93%3A1%2CH128%3A1%2CH112%3A1%2CH147%3A1%2CH148%3A1%2CH56%3A1%2CH58%3A1%2CH59%3A1%2CH91%3A1%2CH20%3A1%2CH104%3A1%2CH115%3A1%2CH75%3A1%2CH86%3A1%2CH25%3A1%2CH90%3A1%2CH32%3A1%2CH116%3A1%2CH124%3A1%2CH7%3A1%2CH152%3A1%2CH37%3A1%2CH42%3A1%2CH43%3A1%2CH153%3A1%2CH149%3A1%2CH145%3A1%2CH134%3A1%2CH139%3A1%2CH144%3A1&genVendors=V77%3A1%2CV67%3A1%2CV79%3A1%2CV71%3A1%2CV69%3A1%2CV7%3A1%2CV5%3A1%2CV9%3A1%2CV1%3A1%2CV70%3A1%2CV3%3A1%2CV68%3A1%2CV78%3A1%2CV17%3A1%2CV76%3A1%2CV80%3A1%2CV16%3A1%2CV72%3A1%2CV10%3A1%2CV40%3A1%2C&geolocation=PK%3BPB&AwaitingReconsent=false; _uetsid=d6791910202a11f097b9bfaf0c52dfc1|n1586e|2|fvb|0|1939; cto_bundle=Bag8ol9DNGtMb3BmVDRnNWVnNWJkMTVQcmFDb0olMkYlMkIwNmZuZGpqR2JqS2VmamxjZWltJTJCWEUxdmw3cXJwTWhEeGFzelBNdU83dXFjSG1CemZpOFJrVkpFJTJGelMyNEk0SkhWZG9DcyUyQnZmYlpmM0JBd1JLMDg2TmIzYzR3MDJMMDdDczJaaHRnQnpoWCUyRm1ib1RHTGV1QzZVTVlqOGNOQm51THYwSEdmeUI5aVZENDdDeVhuRkslMkJtUkJwV2Q5cm1NYWlyQWFwaTFrY3c2cmtZWiUyRm8xN05QNVZEZiUyRmRBJTNEJTNE; ttcsid=1745402880923::pm5yFa6t5a51-RWmpBHn.1.1745403368456; ttcsid_CJ5M5PJC77U7DSNBELOG=1745402880923::I82TPjx5GfCIEgRdpsw1.1.1745403368663; _uetvid=d67945d0202a11f0817e972d9bec397e|1jcuqwt|1745403369059|3|1|bat.bing.com/p/insights/c/u")
-			resp, err := client.Do(req)
-			if err != nil {
-				log.Fatal(err)
-			}
-			defer resp.Body.Close()
-			bodyText, err := io.ReadAll(resp.Body)
-			if err != nil {
-				log.Fatal(err)
-			}
-			var result models.Root
-			if err := json.Unmarshal(bodyText, &result); err != nil {
-				log.Fatal(err)
-			}
-			fmt.Println("Total products found:", len(result.Data.Contents))
-			if len(result.Data.Contents) == 0 {
-				fmt.Println("No more products found ")
-				continue
-			}
-			for _, p := range result.Data.Contents {
-				time.Sleep(4 * time.Second)
-				fmt.Println("Fetching details for product ID:", p.ID)
-				detailedProduct := fetchProductDetails(p.ID)
-				encoder := json.NewEncoder(file)
-				if !first {
-					file.WriteString(",\n")
+			defer file.Close()
+			file.WriteString("[\n")
+			first := true
+			for wc := start; wc <= end; wc++ {
+				url := fmt.Sprintf("https://apigw.trendyol.com/discovery-sfint-browsing-service/api/search-feed/products?source=sr?wc=%d&size=60", wc)
+				fmt.Println("Fetching products for wc:", wc)
+				req, err := http.NewRequest("GET", url, nil)
+				if err != nil {
+					log.Fatal(err)
 				}
-				first = false
-				if err := encoder.Encode(detailedProduct); err != nil {
-					log.Printf("Failed to write product ID %d to file: %v", p.ID, err)
+				req.Header.Set("accept", "application/json")
+				req.Header.Set("accept-language", "en-US,en;q=0.9")
+				req.Header.Set("baggage", "ty.kbt.name=ViewSearchResult,ty.platform=Web,ty.business_unit=Core%20Commerce,ty.channel=INT,com.trendyol.observability.business_transaction.name=ViewSearchResult,ty.source.service.name=WEB%20Storefront%20International,ty.source.deployment.environment=production,ty.source.service.version=4f92d141,ty.source.client.path=unknown,ty.source.service.type=client")
+				req.Header.Set("content-type", "application/json")
+				req.Header.Set("origin", "https://www.trendyol.com")
+				req.Header.Set("platform", "Web")
+				req.Header.Set("priority", "u=1, i")
+				req.Header.Set("sec-ch-ua", `"Google Chrome";v="135", "Not-A.Brand";v="8", "Chromium";v="135"`)
+				req.Header.Set("sec-ch-ua-mobile", "?0")
+				req.Header.Set("sec-ch-ua-platform", `"macOS"`)
+				req.Header.Set("sec-fetch-dest", "empty")
+				req.Header.Set("sec-fetch-mode", "cors")
+				req.Header.Set("sec-fetch-site", "same-site")
+				req.Header.Set("user-agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36")
+				req.Header.Set("x-section-id", "null")
+				req.Header.Set("cookie", "csrf_secret=u2ANLHbZzCsSCZr5y4L3ziOG; platform=web; _cfuvid=JS6Mjd5imwMhUE.DEVCgMHGZxxyaowoBsHkO6AJXN.w-1745402857084-0.0.1.1-604800000; anonUserId=c88ca0a0-202a-11f0-b282-e524755a5054; __cflb=04dToYCH9RsdhPpttDDEnPngTWcVjd8n2VS1BNR3Xj; OptanonAlertBoxClosed=2025-04-23T10:07:40.439Z; pid=c88ca0a0-202a-11f0-b282-e524755a5054; sid=RN4GQHDizD; storefrontId=36; countryCode=AE; language=en; functionalConsent=true; performanceConsent=true; targetingConsent=true; WebRecoTss=similarRecoAdsVersion%2F1%7CallInOneRecoVersion%2F1%7CbasketRecoVersion%2F1%7CshopTheLookVersion%2F1%7CpdpGatewayVersion%2F1%7CsimilarSameBrandVersion%2F1%7CcrossSameBrandVersion%2F1%7CcrossRecoVersion%2F1%7CsimilarRecoVersion%2F1%7CcompleteTheLookVersion%2F1%7CcollectionRecoVersion%2F1%7CcrossRecoAdsVersion%2F1%7CnavigationSideMenuVersion%2FsideMenu%3AinitialTest_1(M)%7ChomepageVersion%2Fsorter%3AhomepageSorterNewTest_d.firstComponent%3AinitialNewTest_1(M)%7CnavigationSectionVersion%2Fsection%3AazSectionTest_1(M)%7CfirstComponent_V1%2F1%7Csorter_V1%2Fb%7Csection_V1%2F1%7CsideMenu_V1%2F1%7CtopWidgets_V1%2F1; UserInfo=%7B%22Gender%22%3Anull%2C%22UserTypeStatus%22%3Anull%2C%22ForceSet%22%3Afalse%7D; navbarGenderId=1; _gcl_au=1.1.140209073.1745402880; tss=firstComponent_V1_1%2Csorter_V1_b%2Csection_V1_1%2CsideMenu_V1_1%2CtopWidgets_V1_1%2CFSA_B%2CProductCardVariantCount_B%2CSuggestionPopular_B%2CRR_2%2CGRRLO_B%2CGRRIn_B%2CVisualCategorySlider_B%2CSuggestionTermActive_B%2CKB_B%2CDGB_B%2CSB_B%2CSuggestion_B%2COFIR_B; _gid=GA1.2.1617466369.1745402880; _scid=kApt02EUMDwDAF4F9vfx7LsfKVHQYORB; _fbp=fb.1.1745402880754.810322442114590411; _ScCbts=%5B%5D; _pin_unauth=dWlkPU5UZ3hNREptTWpJdE1qZ3hPUzAwT0RFMExXSXlOR010TlRreFpESXdOMlZoWTJVNA; _tt_enable_cookie=1; _ttp=01JSH1WRWS90XBGHC34CSJZ9SE_.tt.1; AbTestingCookies=A_82-B_38-C_43-D_9-E_38-F_99-G_63-H_9-I_13-J_94-K_50-L_55-M_17-N_13-O_80; hvtb=1; VisitCount=1; SearchMode=1; WebAbTesting=A_16-B_93-C_88-D_50-E_32-F_13-G_69-H_13-I_35-J_51-K_50-L_84-M_21-N_65-O_66-P_10-Q_76-R_88-S_88-T_73-U_72-V_88-W_6-X_53-Y_65-Z_31; ForceUpdateSearchAbDecider=forced; WebRecoAbDecider=ABbasketRecoVersion_1-ABcrossRecoVersion_1-ABcrossRecoAdsVersion_1-ABsimilarRecoVersion_1-ABsimilarSameBrandVersion_1-ABcrossSameBrandVersion_1-ABpdpGatewayVersion_1-ABallInOneRecoVersion_1-ABattributeRecoVersion_1-ABcollectionRecoVersion_1-ABshopTheLookVersion_1-ABsimilarRecoAdsVersion_1-ABcompleteTheLookVersion_1-ABhomepageVersion_firstComponent%3AinitialNewTest_1.performanceSorting%3AinitialTest_3.sorter%3AhomepageSorterNewTest_d%28M%29-ABnavigationSideMenuVersion_sideMenu%3AinitialTest_1%28M%29-ABnavigationSectionVersion_section%3AazSectionTest_1%28M%29; FirstSession=0; msearchAb=ABAdvertSlotPeriod_1-ABDsNlp_2-ABQR_B-ABSearchFETestV1_B-ABBSA_D-ABSuggestionLC_B; WebAbDecider=ABres_B-ABBMSA_B-ABRRIn_B-ABSCB_B-ABSuggestionHighlight_B-ABBP_A-ABCatTR_B-ABSuggestionTermActive_A-ABAZSmartlisting_63-ABBH2_B-ABMB_B-ABMRF_1-ABARR_B-ABMA_B-ABSP_B-ABPastSearches_B-ABSuggestionJFYProducts_B-ABSuggestionQF_B-ABBadgeBoost_A-ABRelevancy_1-ABFilterRelevancy_1-ABSuggestionBadges_B-ABProductGroupTopPerformer_B-ABOpenFilterToggle_2-ABRR_2-ABBS_2-ABSuggestionPopularCTR_B; AbTesting=pdpAiReviewSummaryUat_B-SFWBAA_V1_B-SFWDBSR_A-SFWDQL_B-SFWDRS_A-SFWDSAOFv2_B-SFWDSFAG_B-SFWDTKV2_A-SSTPRFL_B-STSBuynow_B-STSCouponV2_A-STSImageSocialProof_A-STSRecoRR_B-STSRecoSocialProof_A-WCBsQckFiltTestv2_B-WCOnePageCheckout_B-WEBSFAATest1_A-WebSFAATest2_B-WebSFAATest3_A%7C1745405135%7Cc88ca0a0-202a-11f0-b282-e524755a5054; __cf_bm=NWXTz_0PnBOy.pCO9V30IFpkTw2Qo2Rje1YU4o55T9k-1745403356-1.0.1.1-iyIpH5eFby7QY4AOTWZym26XHjefMDMuC379iE7HNBCR9f5EbPoplMYfMFa5Me.CvsRrbR079unZJVptaKiMm4qrDsLxMA1Jbq3tngIegkc; _ga_9J2BFGDX1E=GS1.1.1745402880.1.1.1745403367.7.0.0; _scid_r=qopt02EUMDwDAF4F9vfx7LsfKVHQYORBse8OLA; _ga=GA1.2.2084360745.1745402880; _dc_gtm_UA-13174585-70=1; _sc_cspv=https%3A%2F%2Ftr.snapchat.com%2Fconfig%2Fcom%2F5df43118-abd2-4cd8-89b9-8cf942d1ee25.js%3Fv%3D3.44.3-2504222057; OptanonConsent=isGpcEnabled=0&datestamp=Wed+Apr+23+2025+15%3A16%3A07+GMT%2B0500+(Pakistan+Standard+Time)&version=202402.1.0&browserGpcFlag=0&isIABGlobal=false&consentId=92cde421-80dd-4b6c-9752-f4bc74338ad3&interactionCount=1&isAnonUser=1&landingPath=NotLandingPage&groups=C0002%3A1%2CC0009%3A1%2CC0007%3A1%2CC0003%3A1%2CC0001%3A1%2CC0004%3A1&hosts=H138%3A1%2CH29%3A1%2CH111%3A1%2CH129%3A1%2CH93%3A1%2CH128%3A1%2CH112%3A1%2CH147%3A1%2CH148%3A1%2CH56%3A1%2CH58%3A1%2CH59%3A1%2CH91%3A1%2CH20%3A1%2CH104%3A1%2CH115%3A1%2CH75%3A1%2CH86%3A1%2CH25%3A1%2CH90%3A1%2CH32%3A1%2CH116%3A1%2CH124%3A1%2CH7%3A1%2CH152%3A1%2CH37%3A1%2CH42%3A1%2CH43%3A1%2CH153%3A1%2CH149%3A1%2CH145%3A1%2CH134%3A1%2CH139%3A1%2CH144%3A1&genVendors=V77%3A1%2CV67%3A1%2CV79%3A1%2CV71%3A1%2CV69%3A1%2CV7%3A1%2CV5%3A1%2CV9%3A1%2CV1%3A1%2CV70%3A1%2CV3%3A1%2CV68%3A1%2CV78%3A1%2CV17%3A1%2CV76%3A1%2CV80%3A1%2CV16%3A1%2CV72%3A1%2CV10%3A1%2CV40%3A1%2C&geolocation=PK%3BPB&AwaitingReconsent=false; _uetsid=d6791910202a11f097b9bfaf0c52dfc1|n1586e|2|fvb|0|1939; cto_bundle=Bag8ol9DNGtMb3BmVDRnNWVnNWJkMTVQcmFDb0olMkYlMkIwNmZuZGpqR2JqS2VmamxjZWltJTJCWEUxdmw3cXJwTWhEeGFzelBNdU83dXFjSG1CemZpOFJrVkpFJTJGelMyNEk0SkhWZG9DcyUyQnZmYlpmM0JBd1JLMDg2TmIzYzR3MDJMMDdDczJaaHRnQnpoWCUyRm1ib1RHTGV1QzZVTVlqOGNOQm51THYwSEdmeUI5aVZENDdDeVhuRkslMkJtUkJwV2Q5cm1NYWlyQWFwaTFrY3c2cmtZWiUyRm8xN05QNVZEZiUyRmRBJTNEJTNE; ttcsid=1745402880923::pm5yFa6t5a51-RWmpBHn.1.1745403368456; ttcsid_CJ5M5PJC77U7DSNBELOG=1745402880923::I82TPjx5GfCIEgRdpsw1.1.1745403368663; _uetvid=d67945d0202a11f0817e972d9bec397e|1jcuqwt|1745403369059|3|1|bat.bing.com/p/insights/c/u")
+				resp, err := client.Do(req)
+				if err != nil {
+					log.Fatal(err)
+				}
+				defer resp.Body.Close()
+				bodyText, err := io.ReadAll(resp.Body)
+				if err != nil {
+					log.Fatal(err)
+				}
+				var result models.Root
+				if err := json.Unmarshal(bodyText, &result); err != nil {
+					log.Fatal(err)
+				}
+				fmt.Println("Total products found:", len(result.Data.Contents))
+				if len(result.Data.Contents) == 0 {
+					fmt.Println("No more products found ")
 					continue
 				}
+				for _, p := range result.Data.Contents {
+					time.Sleep(4 * time.Second)
+					fmt.Println("Fetching details for product ID:", p.ID)
+					detailedProduct := fetchProductDetails(p.ID)
+					encoder := json.NewEncoder(file)
+					if !first {
+						file.WriteString(",\n")
+					}
+					first = false
+					if err := encoder.Encode(detailedProduct); err != nil {
+						log.Printf("Failed to write product ID %d to file: %v", p.ID, err)
+						continue
+					}
+				}
 			}
+			file.WriteString("\n]")
+			fmt.Println("Done!")
 		}
 
-		file.WriteString("\n]")
-		fmt.Println("Done!")
-		}
-		
 		mockProducts, err := readMockData()
 		if err != nil {
 			return c.JSON(500, map[string]string{"error": fmt.Sprintf("Failed to read mock data: %v", err)})
@@ -501,7 +512,6 @@ func startCrawlerService() {
 	})
 
 	e.POST("/users", func(c echo.Context) error {
-		// Define the request structure
 		var req struct {
 			Email    string `json:"email" validate:"required,email"`
 			Username string `json:"username" validate:"required"`
@@ -513,7 +523,6 @@ func startCrawlerService() {
 			return c.JSON(400, map[string]string{"error": "Invalid request"})
 		}
 
-		// Basic validation
 		if req.Email == "" || req.Username == "" || req.Password == "" {
 			return c.JSON(400, map[string]string{"error": "Email, username and password are required"})
 		}
@@ -523,15 +532,11 @@ func startCrawlerService() {
 		}
 
 		db := setupDB()
-
-		// Check if user with this email already exists
 		var count int64
 		db.Model(&models.User{}).Where("email = ?", req.Email).Count(&count)
 		if count > 0 {
 			return c.JSON(409, map[string]string{"error": "User with this email already exists"})
 		}
-
-		// Check if username is taken
 		db.Model(&models.User{}).Where("username = ?", req.Username).Count(&count)
 		if count > 0 {
 			return c.JSON(409, map[string]string{"error": "Username is already taken"})
@@ -551,9 +556,7 @@ func startCrawlerService() {
 			return c.JSON(500, map[string]string{"error": "Failed to create user"})
 		}
 
-		// Don't return the password in the response
 		user.Password = ""
-
 		return c.JSON(201, user)
 	})
 
@@ -564,15 +567,12 @@ func startCrawlerService() {
 		}
 
 		db := setupDB()
-
 		var user models.User
 		if err := db.First(&user, id).Error; err != nil {
 			return c.JSON(404, map[string]string{"error": "User not found"})
 		}
 
-		// Don't return the password
 		user.Password = ""
-
 		return c.JSON(200, user)
 	})
 
@@ -581,18 +581,91 @@ func startCrawlerService() {
 		log.Fatal(s.Serve(lis))
 	}()
 
-	// Start the HTTP server on the available port
 	e.Logger.Fatal(e.Start(fmt.Sprintf(":%d", port)))
 }
 
+// runTask fetches product details for predefined product IDs and saves to data.json
+func runTask(producer sarama.SyncProducer) {
+	fmt.Println("🚀 Running scheduled task at", time.Now())
+	var newProducts []map[string]interface{}
+
+	productIDs, err := fetchProductIDsFromDB()
+	if err != nil {
+		log.Printf("Error fetching product IDs: %v", err)
+		return
+	}
+
+	log.Printf("Fetching details for %d products", len(productIDs))
+
+	for _, productID := range productIDs {
+		fmt.Printf("🔎 Fetching product ID: %d\n", productID)
+		time.Sleep(2 * time.Second)
+		detail := fetchProductDetails(productID)
+		if detail != nil {
+			newProducts = append(newProducts, detail)
+		}
+	}
+
+	if len(newProducts) == 0 {
+		fmt.Println("No new products fetched.")
+		return
+	}
+
+	filePath := "data.json"
+	var existing []map[string]interface{}
+	if file, err := os.ReadFile(filePath); err == nil {
+		json.Unmarshal(file, &existing)
+	}
+	existing = append(existing, newProducts...)
+
+	file, err := os.Create(filePath)
+	if err != nil {
+		log.Printf("Failed to open file %s: %v", filePath, err)
+		return
+	}
+	defer file.Close()
+
+	enc := json.NewEncoder(file)
+	enc.SetIndent("", " ")
+	if err := enc.Encode(existing); err != nil {
+		log.Printf("Failed to encode products to file: %v", err)
+		return
+	}
+
+	fmt.Println("✅ Product details saved to data.json")
+
+	// Convert to models.Product and send to Kafka
+	trendyolResp := make([]models.TrendyolResponse, len(newProducts))
+	for i, p := range newProducts {
+		data, _ := json.Marshal(p)
+		var resp models.TrendyolResponse
+		json.Unmarshal(data, &resp)
+		trendyolResp[i] = resp
+	}
+	products := ConvertTrendyolToProduct(&trendyolResp)
+	productsJSON, err := json.Marshal(products)
+	if err != nil {
+		log.Printf("Failed to marshal products for Kafka: %v", err)
+		return
+	}
+
+	msg := &sarama.ProducerMessage{
+		Topic: "PRODUCTS",
+		Value: sarama.ByteEncoder(productsJSON),
+	}
+	if _, _, err := producer.SendMessage(msg); err != nil {
+		log.Printf("Failed to send message to Kafka: %v", err)
+	} else {
+		fmt.Println("✅ Products sent to Kafka topic PRODUCTS")
+	}
+}
+
 // Product Analysis Service
-// Function to start the Analyzer Service with proper flow
 func startProductAnalysisService() {
 	e := echo.New()
 	db := setupDB()
 	producer := setupKafkaProducer()
 
-	// Get port from environment variable
 	port := os.Getenv("ANALYZER_PORT")
 	if port == "" {
 		port = "8085"
@@ -600,12 +673,10 @@ func startProductAnalysisService() {
 
 	log.Printf("Starting Product Analysis Service on port %s", port)
 
-	// Add health check endpoint
 	e.GET("/health", func(c echo.Context) error {
 		return c.JSON(200, map[string]string{"status": "ok"})
 	})
 
-	// Start HTTP server in a goroutine
 	go func() {
 		if err := e.Start("0.0.0.0:" + port); err != nil && err != http.ErrServerClosed {
 			log.Printf("Analyzer service shutdown: %v", err)
@@ -630,20 +701,17 @@ func startProductAnalysisService() {
 			return
 		}
 		log.Printf("Product Analysis Service received product data `%s`", string(data))
-		var favoritedProducts []models.Product // For collecting favorites
+		var favoritedProducts []models.Product
 
 		for _, p := range products {
-			// Check if product already exists - EXISTING PRODUCT path
 			var existing models.Product
 			result := db.First(&existing, p.ID)
 
 			if result.Error != nil {
 				if result.Error == gorm.ErrRecordNotFound {
-					// NEW PRODUCT path in diagram
 					log.Printf("[Product Analysis] NEW PRODUCT: %s (ID: %d)", p.Name, p.ID)
 					db.Create(&p)
 
-					// Check if newly created product should go to Favorite service
 					var favoriteCount int64
 					db.Model(&models.UserFavorite{}).Where("product_id = ?", p.ID).Count(&favoriteCount)
 					if favoriteCount > 0 && p.IsActive && p.IsFavorite {
@@ -653,20 +721,16 @@ func startProductAnalysisService() {
 					log.Printf("Error checking for existing product: %v", result.Error)
 				}
 			} else {
-				// EXISTING PRODUCT path in diagram
 				log.Printf("[Product Analysis] EXISTING PRODUCT: %s (ID: %d)", p.Name, p.ID)
 
-				// Check stock for INACTIVE PRODUCT path in diagram
 				var stockInfo map[string]interface{}
 				if err := json.Unmarshal(p.StockInfo, &stockInfo); err == nil {
 					if stock, ok := stockInfo["stock"].(float64); ok && stock == 0 {
-						// MARK IS_ACTIVE = FALSE path in diagram
 						log.Printf("[Product Analysis] INACTIVE PRODUCT: %s (ID: %d) - Out of stock", p.Name, p.ID)
 						p.IsActive = false
 					}
 				}
 
-				// Check if this is a favorite product that needs special handling
 				isFavorited := false
 				if p.IsFavorite && p.IsActive {
 					var favoriteCount int64
@@ -679,7 +743,6 @@ func startProductAnalysisService() {
 				}
 
 				if !isFavorited {
-					// REGULAR PRODUCT path in diagram - just update DB
 					log.Printf("[Product Analysis] REGULAR PRODUCT: %s (ID: %d) - Updating in DB", p.Name, p.ID)
 					db.Model(&existing).Updates(map[string]interface{}{
 						"name":                p.Name,
@@ -706,7 +769,6 @@ func startProductAnalysisService() {
 			}
 		}
 
-		// Send all collected favorited products to the Favorite Service
 		if len(favoritedProducts) > 0 {
 			log.Printf("[Product Analysis] Forwarding %d favorited products to Favorite Service", len(favoritedProducts))
 			productsJSON, err := json.Marshal(favoritedProducts)
@@ -731,8 +793,6 @@ func startProductAnalysisService() {
 // Notification Service
 func startNotificationService() {
 	e := echo.New()
-
-	// Find available port for HTTP server
 	port := findAvailablePort(8082, "Notification HTTP")
 
 	go func() {
@@ -740,11 +800,10 @@ func startNotificationService() {
 		log.Fatal(s.Serve(lis))
 	}()
 
-	// Start the HTTP server on the available port
 	e.Logger.Fatal(e.Start(fmt.Sprintf(":%d", port)))
 }
 
-// gRPC Server Setup with port conflict handling
+// gRPC Server Setup
 func startGRPCServer(service string) (*grpc.Server, net.Listener) {
 	var basePort int
 	var serviceName string
@@ -757,10 +816,7 @@ func startGRPCServer(service string) (*grpc.Server, net.Listener) {
 		serviceName = "Notification gRPC"
 	}
 
-	// Find available port
 	port := findAvailablePort(basePort, serviceName)
-
-	// Try to listen on the port
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 	if err != nil {
 		log.Fatalf("Failed to listen on port %d: %v", port, err)
@@ -799,63 +855,37 @@ type CrawlerServer struct {
 	pb.UnimplementedCrawlerServiceServer
 }
 
-// func (s *CrawlerServer) FetchProducts(ctx context.Context, in *pb.FetchRequest) (*pb.FetchResponse, error) {
-// 	// Read mock data from data.json
-// 	mockProducts, err := readMockData()
-// 	if err != nil {
-// 		return nil, fmt.Errorf("failed to read mock data: %v", err)
-// 	}
-
-// 	// Convert mock products to JSON
-// 	productsJSON, err := json.Marshal(mockProducts)
-// 	if err != nil {
-// 		return nil, fmt.Errorf("failed to marshal mock products: %v", err)
-// 	}
-
-// 	return &pb.FetchResponse{Products: productsJSON}, nil
-// }
-
 type NotificationServer struct {
 	pb.UnimplementedNotificationServiceServer
 	emailService *EmailService
 }
 
 func (s *NotificationServer) SendNotification(ctx context.Context, in *pb.NotificationRequest) (*pb.NotificationResponse, error) {
-	// Log the notification
 	log.Printf("Notification for User %s about Product %d: %s", in.UserId, in.ProductId, in.Message)
-
-	// Get database connection
 	db := setupDB()
 
-	// Create email service if not exists
 	if s.emailService == nil {
 		s.emailService = NewEmailService(db)
 	}
 
-	// Parse user ID from string to uint
 	userID, err := strconv.ParseUint(in.UserId, 10, 32)
 	if err != nil {
 		log.Printf("Error parsing user ID: %v", err)
 		return &pb.NotificationResponse{Success: false}, nil
 	}
 
-	// Get password from environment variable
 	password := os.Getenv("EMAIL_APP_PASSWORD")
 	if password == "" {
 		log.Printf("Warning: EMAIL_APP_PASSWORD environment variable not set")
 		return nil, fmt.Errorf("email password not configured")
 	}
 
-	// Extract price information from the message
-	// Assuming message format: "Price dropped from X to Y for ProductName!"
 	var oldPrice, newPrice float64
 	_, err = fmt.Sscanf(in.Message, "Price dropped from %f to %f for", &oldPrice, &newPrice)
 	if err != nil {
 		log.Printf("Error parsing price info from message: %v", err)
-		// Send simple notification with whatever info we have
 		_, err = s.emailService.SendPriceDropNotification(uint(userID), uint(in.ProductId), 0, 0)
 	} else {
-		// Send detailed price drop notification
 		_, err = s.emailService.SendPriceDropNotification(uint(userID), uint(in.ProductId), oldPrice, newPrice)
 	}
 
@@ -863,30 +893,24 @@ func (s *NotificationServer) SendNotification(ctx context.Context, in *pb.Notifi
 		log.Printf("Error sending email notification: %v", err)
 	}
 
-	return &pb.NotificationResponse{
-		Success: true,
-	}, nil
+	return &pb.NotificationResponse{Success: true}, nil
 }
 
-// AddFavorite adds a product to a user's favorites
 func AddFavorite(db *gorm.DB, userID, productID uint) error {
 	favorite := models.UserFavorite{
 		UserID:    userID,
 		ProductID: productID,
 		AddedAt:   time.Now(),
 	}
-
 	result := db.Create(&favorite)
 	return result.Error
 }
 
-// RemoveFavorite removes a product from a user's favorites
 func RemoveFavorite(db *gorm.DB, userID, productID uint) error {
 	result := db.Where("user_id = ? AND product_id = ?", userID, productID).Delete(&models.UserFavorite{})
 	return result.Error
 }
 
-// GetUserFavorites gets all favorite products for a user
 func GetUserFavorites(db *gorm.DB, userID uint) ([]models.Product, error) {
 	var favorites []models.UserFavorite
 	result := db.Where("user_id = ?", userID).Find(&favorites)
@@ -904,24 +928,20 @@ func GetUserFavorites(db *gorm.DB, userID uint) ([]models.Product, error) {
 	return products, result.Error
 }
 
-// IsProductFavorited checks if a product is in a user's favorites
 func IsProductFavorited(db *gorm.DB, userID, productID uint) bool {
 	var count int64
 	db.Model(&models.UserFavorite{}).Where("user_id = ? AND product_id = ?", userID, productID).Count(&count)
 	return count > 0
 }
 
-// EmailService handles email sending and message generation
 type EmailService struct {
 	db *gorm.DB
 }
 
-// NewEmailService creates a new EmailService with a database connection
 func NewEmailService(db *gorm.DB) *EmailService {
 	return &EmailService{db: db}
 }
 
-// SendMail sends an email with the given HTML content
 func (es *EmailService) SendMail(toEmail string, htmlContent, subject string) error {
 	log.Printf("Attempting to send email to %s with subject: %s", toEmail, subject)
 
@@ -930,9 +950,8 @@ func (es *EmailService) SendMail(toEmail string, htmlContent, subject string) er
 	smtpHost := os.Getenv("SMTP_HOST")
 	smtpPort := os.Getenv("SMTP_PORT")
 
-	// Use defaults if env vars not set
 	if senderMail == "" {
-		senderMail = "your-mailtrap-username" // Replace with default
+		senderMail = "your-mailtrap-username"
 	}
 	if smtpHost == "" {
 		smtpHost = "sandbox.smtp.mailtrap.io"
@@ -941,7 +960,6 @@ func (es *EmailService) SendMail(toEmail string, htmlContent, subject string) er
 		smtpPort = "2525"
 	}
 
-	// MIME headers
 	headers := make(map[string]string)
 	headers["From"] = senderMail
 	headers["To"] = toEmail
@@ -950,13 +968,9 @@ func (es *EmailService) SendMail(toEmail string, htmlContent, subject string) er
 	headers["Content-Type"] = "text/html; charset=\"utf-8\""
 	log.Printf("Sending email to %s with subject: %s from %s", toEmail, subject, senderMail)
 
-	// Add explicit TLS configuration
 	config := &tls.Config{ServerName: smtpHost}
-
-	// Auth
 	auth := smtp.PlainAuth("", senderMail, password, smtpHost)
 
-	// Connect to the server and start TLS
 	client, err := smtp.Dial(smtpHost + ":" + smtpPort)
 	if err != nil {
 		log.Printf("Error dialing SMTP server: %v", err)
@@ -974,7 +988,6 @@ func (es *EmailService) SendMail(toEmail string, htmlContent, subject string) er
 		return err
 	}
 
-	// Set up message and send
 	if err = client.Mail(senderMail); err != nil {
 		log.Printf("Error setting sender: %v", err)
 		return err
@@ -991,7 +1004,6 @@ func (es *EmailService) SendMail(toEmail string, htmlContent, subject string) er
 		return err
 	}
 
-	// Build message
 	var msg bytes.Buffer
 	for k, v := range headers {
 		msg.WriteString(fmt.Sprintf("%s: %s\r\n", k, v))
@@ -1013,28 +1025,22 @@ func (es *EmailService) SendMail(toEmail string, htmlContent, subject string) er
 	return nil
 }
 
-// SendPriceDropNotification sends a notification when a product price drops
 func (es *EmailService) SendPriceDropNotification(userID uint, productID uint, oldPrice, newPrice float64) (bool, error) {
 	if es.db == nil {
 		return false, fmt.Errorf("database connection is nil")
 	}
 
-	// Get user email
 	var user models.User
 	if err := es.db.First(&user, userID).Error; err != nil {
 		return false, fmt.Errorf("failed to find user: %w", err)
 	}
 
-	// Get product details
 	var product models.Product
 	if err := es.db.First(&product, productID).Error; err != nil {
 		return false, fmt.Errorf("failed to find product: %w", err)
 	}
 
-	// Get product name and other details
 	name := product.Name
-
-	// Unmarshal the price info
 	var priceInfo map[string]interface{}
 	if err := json.Unmarshal(product.PriceInfo, &priceInfo); err != nil {
 		return false, fmt.Errorf("failed to unmarshal price info: %w", err)
@@ -1045,30 +1051,23 @@ func (es *EmailService) SendPriceDropNotification(userID uint, productID uint, o
 		currency = curr
 	}
 
-	// Price drop notification email template
 	tmpl := `
 	<html>
 	<body style="font-family: Arial, sans-serif; color: #333; line-height: 1.6;">
 		<div style="max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #eee; border-radius: 10px;">
 			<h2 style="color: #e91e63; margin-bottom: 20px;">Price Drop Alert!</h2>
-			
 			<p>Hi <b>{{.UserName}}</b>,</p>
-			
 			<p>Good news! A product you've favorited has dropped in price:</p>
-			
 			<div style="background-color: #f9f9f9; padding: 15px; border-radius: 5px; margin: 20px 0;">
 				<h3 style="margin-top: 0; color: #333;">{{.ProductName}}</h3>
 				<p><b>Price dropped from:</b> <span style="text-decoration: line-through;">{{.OldPrice}} {{.Currency}}</span></p>
 				<p><b>New price:</b> <span style="color: #e91e63; font-weight: bold; font-size: 1.2em;">{{.NewPrice}} {{.Currency}}</span></p>
 				<p><b>You save:</b> <span style="color: #4caf50;">{{.Savings}} {{.Currency}} ({{.SavingsPercent}}%)</span></p>
 			</div>
-			
 			<p>Don't miss out on this great deal!</p>
-			
 			<a href="http://localhost:8080/products/{{.ProductID}}" style="display: inline-block; background-color: #e91e63; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; margin-top: 15px;">View Product</a>
-			
 			<p style="margin-top: 30px; font-size: 0.9em; color: #777;">
-				This notification was sent because you've favorited this product. 
+				This notification was sent because you've favorited this product.
 				<br>Happy Shopping!
 			</p>
 		</div>
@@ -1080,7 +1079,6 @@ func (es *EmailService) SendPriceDropNotification(userID uint, productID uint, o
 		return false, fmt.Errorf("failed to parse email template: %w", err)
 	}
 
-	// Calculate savings
 	savings := oldPrice - newPrice
 	savingsPercent := (savings / oldPrice) * 100
 
@@ -1101,7 +1099,7 @@ func (es *EmailService) SendPriceDropNotification(userID uint, productID uint, o
 		NewPrice:       newPrice,
 		Currency:       currency,
 		Savings:        savings,
-		SavingsPercent: float64(int(savingsPercent*100)) / 100, // Round to 2 decimal places
+		SavingsPercent: float64(int(savingsPercent*100)) / 100,
 		ProductID:      productID,
 	}
 
@@ -1112,8 +1110,6 @@ func (es *EmailService) SendPriceDropNotification(userID uint, productID uint, o
 
 	htmlContent := buf.String()
 	subject := fmt.Sprintf("Price Drop Alert! %s is now cheaper", name)
-
-	// Send the email
 	err = es.SendMail(user.Email, htmlContent, subject)
 	if err != nil {
 		return false, err
@@ -1122,12 +1118,10 @@ func (es *EmailService) SendPriceDropNotification(userID uint, productID uint, o
 	return true, nil
 }
 
-// Function to start the Favorite Product Service with proper flow
 func startFavoriteProductService() {
 	e := echo.New()
 	db := setupDB()
 
-	// Get port from environment variable
 	port := os.Getenv("FAVORITE_PORT")
 	if port == "" {
 		port = "8084"
@@ -1135,19 +1129,16 @@ func startFavoriteProductService() {
 
 	log.Printf("Starting Favorite Product Service on port %s", port)
 
-	// Add health check endpoint
 	e.GET("/health", func(c echo.Context) error {
 		return c.JSON(200, map[string]string{"status": "ok"})
 	})
 
-	// Start HTTP server in a goroutine
 	go func() {
 		if err := e.Start("0.0.0.0:" + port); err != nil && err != http.ErrServerClosed {
 			log.Printf("Favorite service shutdown: %v", err)
 		}
 	}()
 
-	// Connect to notification service via gRPC
 	notificationGrpcPort := os.Getenv("NOTIFICATION_GRPC_PORT")
 	if notificationGrpcPort == "" {
 		notificationGrpcPort = "8083"
@@ -1161,13 +1152,11 @@ func startFavoriteProductService() {
 	}
 	notificationClient := pb.NewNotificationServiceClient(conn)
 
-	// Get topic from environment
 	favoritesTopic := os.Getenv("KAFKA_FAVORITES_TOPIC")
 	if favoritesTopic == "" {
 		favoritesTopic = "FAVORITE_PRODUCTS"
 	}
 
-	// Consume messages from FAVORITE_PRODUCTS topic
 	setupKafkaConsumer(favoritesTopic, func(data []byte) {
 		log.Printf("[Favorite Service] Received favorited product update `%s`", string(data))
 
@@ -1178,17 +1167,14 @@ func startFavoriteProductService() {
 		}
 
 		for _, updatedProduct := range products {
-			// Find the existing product in the database
 			var existingProduct models.Product
 			if err := db.First(&existingProduct, updatedProduct.ID).Error; err != nil {
 				log.Printf("Error finding existing product %d: %v", updatedProduct.ID, err)
 				continue
 			}
 
-			// PRIORITY UPDATE STOCK & PRICE step in diagram
 			log.Printf("[Favorite Service] Priority update for product %s (ID: %d)", existingProduct.Name, existingProduct.ID)
 
-			// Extract price and stock information for comparison
 			var oldPriceInfo, newPriceInfo map[string]interface{}
 			var oldStockInfo, newStockInfo map[string]interface{}
 
@@ -1212,7 +1198,6 @@ func startFavoriteProductService() {
 				continue
 			}
 
-			// Check for price and stock changes
 			oldPrice, oldPriceOk := oldPriceInfo["originalPrice"].(float64)
 			newPrice, newPriceOk := newPriceInfo["originalPrice"].(float64)
 			oldStock, oldStockOk := oldStockInfo["stock"].(float64)
@@ -1223,12 +1208,10 @@ func startFavoriteProductService() {
 				continue
 			}
 
-			// LOG STOCK & PRICE CHANGES step in diagram
 			if oldPrice != newPrice || oldStock != newStock {
 				log.Printf("[Favorite Service] Change detected: Price: %.2f -> %.2f, Stock: %.0f -> %.0f",
 					oldPrice, newPrice, oldStock, newStock)
 
-				// Create a log entry
 				priceLog := models.PriceStockLog{
 					ProductID:  existingProduct.ID,
 					OldPrice:   fmt.Sprintf("%.2f", oldPrice),
@@ -1239,17 +1222,14 @@ func startFavoriteProductService() {
 				}
 				db.Create(&priceLog)
 
-				// Update the product in database
 				db.Model(&existingProduct).Updates(map[string]interface{}{
 					"price_info": updatedProduct.PriceInfo,
 					"stock_info": updatedProduct.StockInfo,
 				})
 
-				// PRICE DROP DETECTED? step in diagram
 				if newPrice < oldPrice {
 					log.Printf("[Favorite Service] PRICE DROP DETECTED for %s!", existingProduct.Name)
 
-					// Find all users who favorited this product
 					var favorites []models.UserFavorite
 					if err := db.Where("product_id = ?", existingProduct.ID).Find(&favorites).Error; err != nil {
 						log.Printf("Error finding favorites for product %d: %v", existingProduct.ID, err)
@@ -1258,7 +1238,6 @@ func startFavoriteProductService() {
 
 					log.Printf("[Favorite Service] Found %d users to notify", len(favorites))
 
-					// NOTIFICATION SERVICE step in diagram - notify each user about the price drop
 					for _, favorite := range favorites {
 						var user models.User
 						if err := db.First(&user, favorite.UserID).Error; err != nil {
@@ -1286,4 +1265,25 @@ func startFavoriteProductService() {
 			}
 		}
 	})
+}
+
+func fetchProductIDsFromDB() ([]int, error) {
+	db := setupDB()
+	var productIDs []int
+
+	// Join with user_favorites table to get only favorited products
+	result := db.Model(&models.Product{}).
+		Select("DISTINCT products.id").
+		Joins("JOIN user_favorites ON products.id = user_favorites.product_id").
+		Where("products.is_active = ? AND products.is_favorite = ?", true, true).
+		Pluck("products.id", &productIDs)
+
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	if len(productIDs) == 0 {
+		log.Println("No active favorited products found in database")
+		return nil, fmt.Errorf("no active favorited products")
+	}
+	return productIDs, nil
 }

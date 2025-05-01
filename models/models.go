@@ -132,8 +132,6 @@ type Product struct {
 }
 
 type TrendyolResponse struct {
-	Data struct {
-		Contents []struct {
 			ID          int    `json:"id"`
 			Name        string `json:"name"`
 			ProductCode string `json:"productCode"`
@@ -222,10 +220,4 @@ type TrendyolResponse struct {
 				Price      float64 `json:"price"`
 				Value      string  `json:"value"`
 			} `json:"otherMerchantVariants"`
-		} `json:"contents"`
-		Title        string `json:"title"`
-		RelevancyKey string `json:"relevancyKey"`
-	} `json:"data"`
-	StatusCode int  `json:"statusCode"`
-	IsSuccess  bool `json:"isSuccess"`
 }
