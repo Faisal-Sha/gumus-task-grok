@@ -364,6 +364,8 @@ func startCrawlerService() {
 	log.Println("✅ Scheduler started for product details fetching")
 
 	e.GET("/fetch", func(c echo.Context) error {
+
+		// {"flag" : true}
 		var req struct {
 			Flag bool `json:"flag"`
 		}
@@ -463,6 +465,11 @@ func startCrawlerService() {
 	})
 
 	e.POST("/favorites", func(c echo.Context) error {
+
+// 		{
+//     "user_id" : 1,
+//     "product_id" : 449950861
+// }
 		var req struct {
 			UserID    uint `json:"user_id"`
 			ProductID uint `json:"product_id"`
