@@ -339,29 +339,8 @@ func ConvertTrendyolToProduct(item *[]models.TrendyolResponse) []models.Product 
 func startCrawlerService() {
 	e := echo.New()
 	producer := setupKafkaProducer()
-
 	// Find available port for HTTP server
 	port := findAvailablePort(8080, "Crawler HTTP")
-
-	// Set up cron scheduler
-	c := cron.New()
-	id, err := c.AddFunc("* * * * *", func() {
-		productIDs, err := fetchProductIDsFromDB()
-		if err != nil {
-			log.Printf("Failed to fetch favorited product IDs: %v", err)
-			return
-		}
-		log.Printf("Found %d active favorited products to update", len(productIDs))
-		if len(productIDs) > 0 {
-			runTask(producer)
-		}
-	})
-	if err != nil {
-		log.Fatal("Invalid cron expression for runTask:", err)
-	}
-	jobIDs["productDetails"] = id
-	c.Start()
-	log.Println("✅ Scheduler started for product details fetching")
 
 	e.GET("/fetch", func(c echo.Context) error {
 
@@ -374,8 +353,8 @@ func startCrawlerService() {
 		}
 		if req.Flag {
 			client := &http.Client{}
-			start := 1
-			end := 160
+			start := 94
+			end := 200
 			file, err := os.Create("data.json")
 			if err != nil {
 				log.Fatal("Failed to create JSON file:", err)
@@ -384,6 +363,7 @@ func startCrawlerService() {
 			file.WriteString("[\n")
 			first := true
 			for wc := start; wc <= end; wc++ {
+				fmt.Println("Fetched Products:", (wc-27)*60)
 				url := fmt.Sprintf("https://apigw.trendyol.com/discovery-sfint-browsing-service/api/search-feed/products?source=sr?wc=%d&size=60", wc)
 				fmt.Println("Fetching products for wc:", wc)
 				req, err := http.NewRequest("GET", url, nil)
@@ -466,10 +446,10 @@ func startCrawlerService() {
 
 	e.POST("/favorites", func(c echo.Context) error {
 
-// 		{
-//     "user_id" : 1,
-//     "product_id" : 449950861
-// }
+		// 		{
+		//     "user_id" : 1,
+		//     "product_id" : 449950861
+		// }
 		var req struct {
 			UserID    uint `json:"user_id"`
 			ProductID uint `json:"product_id"`
@@ -657,7 +637,7 @@ func runTask(producer sarama.SyncProducer) {
 	}
 
 	msg := &sarama.ProducerMessage{
-		Topic: "PRODUCTS",
+		Topic: "FAVORITE_PRODUCTS",
 		Value: sarama.ByteEncoder(productsJSON),
 	}
 	if _, _, err := producer.SendMessage(msg); err != nil {
@@ -1129,11 +1109,31 @@ func startFavoriteProductService() {
 	e := echo.New()
 	db := setupDB()
 
+	producer := setupKafkaProducer()
+
 	port := os.Getenv("FAVORITE_PORT")
 	if port == "" {
 		port = "8084"
 	}
-
+	// Set up cron scheduler
+	c := cron.New()
+	id, err := c.AddFunc("* * * * *", func() {
+		productIDs, err := fetchProductIDsFromDB()
+		if err != nil {
+			log.Printf("Failed to fetch favorited product IDs: %v", err)
+			return
+		}
+		log.Printf("Found %d active favorited products to update", len(productIDs))
+		if len(productIDs) > 0 {
+			runTask(producer)
+		}
+	})
+	if err != nil {
+		log.Fatal("Invalid cron expression for runTask:", err)
+	}
+	jobIDs["productDetails"] = id
+	c.Start()
+	log.Println("✅ Scheduler started for product details fetching")
 	log.Printf("Starting Favorite Product Service on port %s", port)
 
 	e.GET("/health", func(c echo.Context) error {
